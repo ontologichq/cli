@@ -10,7 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 brain-proto = { path = "../proto" }
-rustyline = { version = "18", features = ["derive"] }
+rustyline = { version = "18", features = ["buffer-redux", "derive"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 tonic = { version = "0.14", features = ["tls-ring", "tls-webpki-roots"] }
 
