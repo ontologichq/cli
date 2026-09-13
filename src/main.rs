@@ -1,5 +1,6 @@
-//! `brain`: the command line for a brain engine. Every command calls the engine over gRPC
-//! with TLS and renders what comes back; imports and questions print stage by stage.
+//! `ontologic`: the command line for a brain engine. It signs in, then every command calls
+//! the engine over gRPC with TLS and renders what comes back; imports and questions print
+//! stage by stage.
 
 mod commands;
 mod connect;
@@ -14,17 +15,22 @@ use brain_proto as pb;
 use commands::{Cli, say};
 use connect::DEFAULT_PORT;
 
-const HISTORY: &str = ".brain_history";
+const HISTORY: &str = ".ontologic_history";
 
 const USAGE: &str = "\
-usage: brain [-h|--host <host[:port]>] [--ca <pem>] [--no-color] [--help]
+usage: ontologic -h <host:port> -u <user> -p <key> [--ca <pem>] [--no-color] [--help]
 
   -h, --host   the engine (default localhost:6969); https://, or http:// for an engine run with --no-tls
-  --ca         trust this certificate (default for localhost: .brain/tls/engine.pem)
+  -u, --user   your user name (or set ONTOLOGIC_USER)
+  -p, --key    your key (or set ONTOLOGIC_KEY, which keeps it out of your shell history)
+  --ca         trust this certificate (default: .brain/tls/engine.pem for localhost,
+               .brain/tls/<host>.pem for other hosts, when the file exists)
   --no-color   plain output";
 
 struct Args {
     host: String,
+    user: String,
+    key: String,
     ca: Option<PathBuf>,
     color: bool,
 }
@@ -32,6 +38,8 @@ struct Args {
 fn args() -> Result<Args, String> {
     let mut args = Args {
         host: format!("localhost:{DEFAULT_PORT}"),
+        user: std::env::var("ONTOLOGIC_USER").unwrap_or_default(),
+        key: std::env::var("ONTOLOGIC_KEY").unwrap_or_default(),
         ca: None,
         color: io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none(),
     };
@@ -39,11 +47,16 @@ fn args() -> Result<Args, String> {
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "-h" | "--host" => args.host = it.next().ok_or("--host needs a value")?,
+            "-u" | "--user" => args.user = it.next().ok_or("--user needs a value")?,
+            "-p" | "--key" => args.key = it.next().ok_or("--key needs a value")?,
             "--ca" => args.ca = Some(PathBuf::from(it.next().ok_or("--ca needs a value")?)),
             "--no-color" => args.color = false,
             "--help" => return Err(USAGE.to_string()),
             other => return Err(format!("unknown argument {other}\n{USAGE}")),
         }
+    }
+    if args.user.is_empty() || args.key.is_empty() {
+        return Err(format!("sign in with -u <user> -p <key>\n{USAGE}"));
     }
     Ok(args)
 }
@@ -112,7 +125,7 @@ fn main() {
         .expect("start the runtime");
     let connected = {
         let _guard = rt.enter();
-        connect::connect(&args.host, args.ca.as_deref())
+        connect::connect(&args.host, args.ca.as_deref(), &args.user, &args.key)
     };
     let (client, host) = match connected {
         Ok(connected) => connected,
@@ -130,10 +143,12 @@ fn main() {
     };
     say(&format!(
         "{} {}",
-        paint::bold("brain"),
+        paint::bold("ontologic"),
         paint::dim("\\h for help, \\q to quit")
     ));
-    cli.health();
+    if !cli.welcome() {
+        std::process::exit(1);
+    }
     if io::stdin().is_terminal() {
         if let Err(e) = interactive(&mut cli) {
             eprintln!("{}", render::error(&e.to_string()));

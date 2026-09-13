@@ -5,12 +5,10 @@ use std::io::{self, Write};
 use std::path::Path;
 
 use brain_proto as pb;
-use brain_proto::brain_client::BrainClient;
 use tokio::runtime::Runtime;
-use tonic::Status;
-use tonic::transport::Channel;
+use tonic::{Code, Status};
 
-use crate::connect::describe;
+use crate::connect::{Client, describe};
 use crate::input::{self, Command};
 use crate::{paint, render};
 
@@ -21,19 +19,26 @@ pub const HELP: &str = "\
 \\t delete <name>      forget a tenant and everything in it
 \\t export <file>      save the tenant to a .ttl file in this directory
 \\t import <file>      load a .ttl file into the current (empty) tenant
+\\t users              who can use the current tenant
 \\import <sentence>    add a fact: link names, find relations, re-link older sources
 \\ask <question>       answer from what the tenant knows, with probabilities
 \\s                    what the tenant knows, and what it cost
 \\s <id>               everything about an entity (e1) or a source (s1)
+\\u me                 your user, role and tenants
+\\u add <user>         admins: add a member and print their key once
+\\u grant <user> <t>   admins: let a member use tenant <t>
+\\u remove <user> <t>  admins: take that access away
 \\h                    this help
 \\q                    quit (Ctrl-D works too)
 Up and down arrows walk the history.";
 
-const TENANT_USAGE: &str = "usage: \\t create <name> | \\t checkout <name> | \\t get | \\t delete <name> | \\t export <file> | \\t import <file>";
+const TENANT_USAGE: &str = "usage: \\t create <name> | \\t checkout <name> | \\t get | \\t delete <name> | \\t export <file> | \\t import <file> | \\t users";
+const USER_USAGE: &str =
+    "usage: \\u me | \\u add <user> | \\u grant <user> <tenant> | \\u remove <user> <tenant>";
 
 pub struct Cli {
     pub rt: Runtime,
-    pub client: BrainClient<Channel>,
+    pub client: Client,
     pub host: String,
     pub current: Option<String>,
     pub session: pb::Cost,
@@ -69,26 +74,47 @@ impl Cli {
             .map_err(|status| describe(&status, &self.host))
     }
 
-    pub fn health(&mut self) {
+    /// Prints the engine, its model and who is signed in. Returns false when the user or key
+    /// is wrong, which ends the CLI; an engine that cannot be reached is only reported.
+    pub fn welcome(&mut self) -> bool {
         let mut client = self.client.clone();
+        let me = match self.rt.block_on(client.me(pb::Empty {})) {
+            Ok(me) => me.into_inner(),
+            Err(status) if status.code() == Code::Unauthenticated => {
+                say(&render::error(status.message()));
+                return false;
+            }
+            Err(status) => {
+                say(&render::error(&describe(&status, &self.host)));
+                return true;
+            }
+        };
+        let signed_in = format!("signed in as {} ({})", paint::bold(&me.name), me.role);
         match self.call(self.rt.block_on(client.health(pb::Empty {}))) {
             Ok(h) if h.llm_error.is_empty() => say(&format!(
-                "{} {} · llm {}",
+                "{} {} · llm {} · {signed_in}",
                 paint::dim("engine:"),
                 paint::bold(&self.host),
                 paint::cyan(&h.llm)
             )),
-            Ok(h) => say(&render::warning(&format!(
-                "engine at {} has no LLM configured ({}); \\import and \\ask will fail",
-                self.host, h.llm_error
-            ))),
+            Ok(h) => say(&format!(
+                "{} {} · {signed_in}\n{}",
+                paint::dim("engine:"),
+                paint::bold(&self.host),
+                render::warning(&format!(
+                    "the engine has no LLM configured ({}); \\import and \\ask will fail",
+                    h.llm_error
+                ))
+            )),
             Err(e) => say(&render::error(&e)),
         }
+        true
     }
 
     fn run(&mut self, command: Command) -> Result<Option<String>, String> {
         match command {
             Command::Tenant(sub, arg) => self.tenant_command(sub, arg).map(Some),
+            Command::User(sub, rest) => self.user_command(sub, rest).map(Some),
             Command::Import("") => Err("usage: \\import <sentence>".into()),
             Command::Import(text) => self.import(text).map(|()| None),
             Command::Ask("") => Err("usage: \\ask <question>".into()),
@@ -127,6 +153,12 @@ impl Cli {
             "get" if arg.is_empty() => {
                 let list = self.call(self.rt.block_on(client.list_tenants(pb::Empty {})))?;
                 Ok(render::tenant_list(&list, self.current.as_deref()))
+            }
+            "users" if arg.is_empty() => {
+                let name = self.tenant()?;
+                let request = pb::TenantName { name: name.clone() };
+                let list = self.call(self.rt.block_on(client.tenant_users(request)))?;
+                Ok(render::tenant_users(&name, &list))
             }
             "delete" => {
                 let t = self.call(self.rt.block_on(client.delete_tenant(named(arg)?)))?;
@@ -250,6 +282,37 @@ impl Cli {
         }
     }
 
+    fn user_command(&mut self, sub: &str, rest: &str) -> Result<String, String> {
+        let mut client = self.client.clone();
+        let (user, tenant) = input::split_word(rest);
+        let access = || pb::Access {
+            user: user.to_string(),
+            tenant: tenant.to_string(),
+        };
+        match sub {
+            "me" if rest.is_empty() => {
+                let me = self.call(self.rt.block_on(client.me(pb::Empty {})))?;
+                Ok(render::me(&me))
+            }
+            "add" if !user.is_empty() && tenant.is_empty() => {
+                let request = pb::UserName {
+                    name: user.to_string(),
+                };
+                let added = self.call(self.rt.block_on(client.add_user(request)))?;
+                Ok(render::new_user(&added))
+            }
+            "grant" if !user.is_empty() && !tenant.is_empty() => {
+                let granted = self.call(self.rt.block_on(client.grant(access())))?;
+                Ok(render::access(&granted, tenant, true))
+            }
+            "remove" if !user.is_empty() && !tenant.is_empty() => {
+                let revoked = self.call(self.rt.block_on(client.revoke(access())))?;
+                Ok(render::access(&revoked, tenant, false))
+            }
+            _ => Err(USER_USAGE.into()),
+        }
+    }
+
     fn show(&mut self, id: &str) -> Result<String, String> {
         use pb::show_reply::View;
         let tenant = self.tenant()?;
@@ -268,7 +331,7 @@ impl Cli {
     }
 
     pub fn prompt(&self) -> String {
-        format!("{}> ", self.current.as_deref().unwrap_or("brain"))
+        format!("{}> ", self.current.as_deref().unwrap_or("ontologic"))
     }
 
     /// Runs one line; false means quit.

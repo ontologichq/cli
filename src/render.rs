@@ -553,3 +553,69 @@ pub fn source_view(v: &pb::SourceView) -> String {
     out.push(row("linked", &[linked(&v.segments)]));
     out.join("\n")
 }
+
+// ---------------------------------------------------------------------------------------
+// Users
+
+fn role(role: &str) -> String {
+    match role {
+        "admin" => magenta(role),
+        _ => cyan(role),
+    }
+}
+
+/// `\u add`: the new member, and their key this one time.
+pub fn new_user(added: &pb::NewUser) -> String {
+    let name = added.user.as_ref().map_or("", |u| u.name.as_str());
+    format!(
+        "user {} added ({})\n{} {}\n     {}",
+        bold(name),
+        role("member"),
+        dim("key "),
+        bold_green(&added.key),
+        dim(&format!(
+            "shown once: hand it to {name}, who signs in with -u {name} -p <key>"
+        ))
+    )
+}
+
+/// `\u me`.
+pub fn me(user: &pb::User) -> String {
+    let tenants = match (user.role.as_str(), user.tenants.is_empty()) {
+        ("admin", _) => "all".to_string(),
+        (_, true) => dim("none yet (an admin can \\u grant you)"),
+        _ => user
+            .tenants
+            .iter()
+            .map(|t| blue(t))
+            .collect::<Vec<_>>()
+            .join(", "),
+    };
+    [
+        header("me"),
+        row("user", &[bold(&user.name)]),
+        row("role", &[role(&user.role)]),
+        row("tenants", &[tenants]),
+    ]
+    .join("\n")
+}
+
+/// `\t users`: everyone who can use the tenant.
+pub fn tenant_users(tenant: &str, list: &pb::UserList) -> String {
+    let width = list.users.iter().map(|u| u.name.len()).max().unwrap_or(0);
+    let mut lines = vec![header(&format!("users of {tenant}"))];
+    for user in &list.users {
+        let name = format!("{:<width$}", user.name);
+        lines.push(format!(" {}  {}", bold(&name), role(&user.role)));
+    }
+    lines.join("\n")
+}
+
+/// `\u grant` and `\u remove`.
+pub fn access(user: &pb::User, tenant: &str, granted: bool) -> String {
+    let now = match granted {
+        true => green("can now use"),
+        false => yellow("can no longer use"),
+    };
+    format!("{} {now} {}", bold(&user.name), blue(tenant))
+}

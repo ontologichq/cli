@@ -10,6 +10,8 @@ use crate::paint::ansi;
 pub enum Command<'a> {
     /// `\t <subcommand> [arg]`
     Tenant(&'a str, &'a str),
+    /// `\u <subcommand> [user [tenant]]`
+    User(&'a str, &'a str),
     Import(&'a str),
     Ask(&'a str),
     Show(&'a str),
@@ -18,9 +20,11 @@ pub enum Command<'a> {
     Unknown(&'a str),
 }
 
-pub const COMMANDS: &[&str] = &["\\t", "\\import", "\\ask", "\\s", "\\h", "\\q"];
-pub const TENANT_SUBCOMMANDS: &[&str] =
-    &["create", "checkout", "get", "delete", "import", "export"];
+pub const COMMANDS: &[&str] = &["\\t", "\\u", "\\import", "\\ask", "\\s", "\\h", "\\q"];
+pub const TENANT_SUBCOMMANDS: &[&str] = &[
+    "create", "checkout", "get", "delete", "import", "export", "users",
+];
+pub const USER_SUBCOMMANDS: &[&str] = &["me", "add", "grant", "remove"];
 
 /// "import Priya lives here" -> ("import", "Priya lives here").
 pub fn split_word(text: &str) -> (&str, &str) {
@@ -49,6 +53,10 @@ pub fn parse(line: &str) -> Option<Command<'_>> {
         "\\t" => {
             let (sub, arg) = split_word(rest);
             Command::Tenant(sub, unquote(arg))
+        }
+        "\\u" => {
+            let (sub, rest) = split_word(rest);
+            Command::User(sub, rest)
         }
         "\\import" => Command::Import(unquote(rest)),
         "\\ask" => Command::Ask(unquote(rest)),
@@ -91,10 +99,14 @@ pub fn highlight_line(line: &str) -> String {
         return out;
     }
     match command {
-        "\\t" => {
+        "\\t" | "\\u" => {
+            let subcommands = match command {
+                "\\t" => TENANT_SUBCOMMANDS,
+                _ => USER_SUBCOMMANDS,
+            };
             let word_end = body.find(char::is_whitespace).unwrap_or(body.len());
             let (word, tail) = body.split_at(word_end);
-            let word_color = match TENANT_SUBCOMMANDS.contains(&word) {
+            let word_color = match subcommands.contains(&word) {
                 true => SUBCOMMAND,
                 false => TYPING,
             };
@@ -155,6 +167,10 @@ mod tests {
             Some(Command::Tenant("export", "my file.ttl"))
         ));
         assert!(matches!(parse("\\t get"), Some(Command::Tenant("get", ""))));
+        assert!(matches!(
+            parse("\\u grant  priya_raman acme "),
+            Some(Command::User("grant", "priya_raman acme"))
+        ));
         assert!(matches!(parse("\\s e1"), Some(Command::Show("e1"))));
         assert!(matches!(parse("\\q"), Some(Command::Quit)));
         assert!(matches!(
@@ -199,6 +215,15 @@ mod tests {
                 ansi(COMMAND, "\\t"),
                 ansi(SUBCOMMAND, "create"),
                 ansi(TEXT, "acme ")
+            )
+        );
+        assert_eq!(
+            highlight_line("\\u grant tomas acme"),
+            format!(
+                "{} {} {}",
+                ansi(COMMAND, "\\u"),
+                ansi(SUBCOMMAND, "grant"),
+                ansi(TEXT, "tomas acme")
             )
         );
         assert_eq!(highlight_line("\\as"), ansi(TYPING, "\\as"));

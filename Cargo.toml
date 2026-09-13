@@ -1,11 +1,11 @@
 [package]
-name = "brain-cli"
+name = "ontologic"
 version = "0.0.0"
 edition.workspace = true
 publish.workspace = true
 
 [[bin]]
-name = "brain"
+name = "ontologic"
 path = "src/main.rs"
 
 [dependencies]
