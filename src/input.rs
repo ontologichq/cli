@@ -14,16 +14,36 @@ pub enum Command<'a> {
     User(&'a str, &'a str),
     /// `\\import fact <sentence>` or `\\import blob <file>`
     Import(&'a str, &'a str),
-    Ask(&'a str),
+    /// `\ask [--staged] [--facts] <question>`
+    Ask(Question<'a>),
     Show(&'a str),
+    Commit,
+    Rollback,
     Version,
     Help,
     Quit,
     Unknown(&'a str),
 }
 
+/// A question and how to answer it: from the staged copy, and from facts alone.
+#[derive(Debug, PartialEq)]
+pub struct Question<'a> {
+    pub text: &'a str,
+    pub staged: bool,
+    pub facts: bool,
+}
+
 pub const COMMANDS: &[&str] = &[
-    "\\t", "\\u", "\\import", "\\ask", "\\s", "\\v", "\\h", "\\q",
+    "\\t",
+    "\\u",
+    "\\import",
+    "\\ask",
+    "\\s",
+    "\\commit",
+    "\\rollback",
+    "\\v",
+    "\\h",
+    "\\q",
 ];
 pub const TENANT_SUBCOMMANDS: &[&str] = &[
     "create", "checkout", "get", "delete", "import", "export", "users",
@@ -47,6 +67,23 @@ pub fn unquote(text: &str) -> &str {
     text
 }
 
+/// `--staged --facts who is CEO`: the flags in front, then the question.
+fn question(mut rest: &str) -> Question<'_> {
+    let (mut staged, mut facts) = (false, false);
+    loop {
+        match split_word(rest) {
+            ("--staged", tail) => (staged, rest) = (true, tail),
+            ("--facts", tail) => (facts, rest) = (true, tail),
+            _ => break,
+        }
+    }
+    Question {
+        text: unquote(rest),
+        staged,
+        facts,
+    }
+}
+
 /// A line is `\command` plus optional text; the text is the rest of the line, trimmed.
 pub fn parse(line: &str) -> Option<Command<'_>> {
     let line = line.trim();
@@ -67,8 +104,10 @@ pub fn parse(line: &str) -> Option<Command<'_>> {
             let (sub, rest) = split_word(rest);
             Command::Import(sub, unquote(rest))
         }
-        "\\ask" => Command::Ask(unquote(rest)),
+        "\\ask" => Command::Ask(question(rest)),
         "\\s" => Command::Show(rest),
+        "\\commit" => Command::Commit,
+        "\\rollback" => Command::Rollback,
         "\\v" => Command::Version,
         "\\h" => Command::Help,
         "\\q" => Command::Quit,
@@ -168,10 +207,36 @@ mod tests {
             parse("  \\import fact  \"Priya went to Acme.\"  "),
             Some(Command::Import("fact", "Priya went to Acme."))
         ));
-        assert!(matches!(
-            parse("\\ask who is Priya"),
-            Some(Command::Ask("who is Priya"))
-        ));
+        let asked = |line| match parse(line) {
+            Some(Command::Ask(q)) => Some(q),
+            _ => None,
+        };
+        assert_eq!(
+            asked("\\ask who is Priya"),
+            Some(Question {
+                text: "who is Priya",
+                staged: false,
+                facts: false
+            })
+        );
+        assert_eq!(
+            asked("\\ask --facts --staged  \"who is CEO\""),
+            Some(Question {
+                text: "who is CEO",
+                staged: true,
+                facts: true
+            })
+        );
+        assert_eq!(
+            asked("\\ask --factsy"),
+            Some(Question {
+                text: "--factsy",
+                staged: false,
+                facts: false
+            })
+        );
+        assert!(matches!(parse("\\commit"), Some(Command::Commit)));
+        assert!(matches!(parse("\\rollback"), Some(Command::Rollback)));
         assert!(matches!(
             parse("\\t export my file.ttl"),
             Some(Command::Tenant("export", "my file.ttl"))

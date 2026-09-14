@@ -22,7 +22,10 @@ pub const HELP: &str = "\
 \\t users              who can use the current tenant
 \\import fact <text>  add a fact: link things, find relations, re-link older sources
 \\import blob <file>  add a file from this directory: an email (.eml) or text, part by part
-\\ask <question>       answer from what the tenant knows, with probabilities
+\\ask <question>       answer from what the tenant has committed, with probabilities
+\\ask --staged <q>     answer with the imports not committed yet included
+\\commit               make the staged imports part of the tenant, so questions see them
+\\rollback             drop the staged imports (and the re-links they made)
 \\s                    what the tenant knows, and what it cost
 \\s <id>               everything about an entity (e1) or a source (s1)
 \\u me                 your user, role and tenants
@@ -126,9 +129,13 @@ impl Cli {
                 self.import_blob(file).map(|()| None)
             }
             Command::Import(..) => Err(IMPORT_USAGE.into()),
-            Command::Ask("") => Err("usage: \\ask <question>".into()),
-            Command::Ask(text) => self.ask(text).map(|()| None),
+            Command::Ask(q) if q.text.is_empty() => {
+                Err("usage: \\ask [--staged] [--facts] <question>".into())
+            }
+            Command::Ask(q) => self.ask(&q).map(|()| None),
             Command::Show(id) => self.show(id).map(Some),
+            Command::Commit => self.commit(true).map(Some),
+            Command::Rollback => self.commit(false).map(Some),
             Command::Version => self.version().map(Some),
             Command::Help => Ok(Some(HELP.to_string())),
             Command::Quit => unreachable!("handled by the loop"),
@@ -198,11 +205,20 @@ impl Cli {
                     fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
                 }
                 fs::write(path, &file.content).map_err(|e| format!("{arg}: {e}"))?;
+                let staged = file
+                    .summary
+                    .as_ref()
+                    .and_then(|s| s.staged.as_ref())
+                    .is_some_and(|s| s.sources > 0);
                 let summary = file
                     .summary
                     .map(|s| render::summary(&s))
                     .unwrap_or_default();
-                Ok(format!("wrote {} ({summary})", paint::bold(arg)))
+                let note = match staged {
+                    true => "; staged imports are not exported until \\commit",
+                    false => "",
+                };
+                Ok(format!("wrote {} ({summary}){note}", paint::bold(arg)))
             }
             "import" => {
                 if arg.is_empty() {
@@ -298,14 +314,30 @@ impl Cli {
         }
     }
 
-    fn ask(&mut self, question: &str) -> Result<(), String> {
+    /// `\\commit` (true) or `\\rollback` (false).
+    fn commit(&mut self, commit: bool) -> Result<String, String> {
+        let name = pb::TenantName {
+            name: self.tenant()?,
+        };
+        let mut client = self.client.clone();
+        let reply = match commit {
+            true => self.rt.block_on(client.commit(name)),
+            false => self.rt.block_on(client.rollback(name)),
+        };
+        let summary = self.call(reply)?;
+        Ok(render::committed(&summary, commit))
+    }
+
+    fn ask(&mut self, q: &input::Question) -> Result<(), String> {
         use pb::ask_event::Event;
+        let question = q.text;
         let tenant = self.tenant()?;
         let mut client = self.client.clone();
         let request = pb::AskRequest {
             tenant,
             question: question.to_string(),
-            graph_only: false,
+            graph_only: q.facts,
+            staged: q.staged,
         };
         let mut stream = self.call(self.rt.block_on(client.ask(request)))?;
         loop {

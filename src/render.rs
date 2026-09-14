@@ -201,6 +201,36 @@ pub fn summary(s: &pb::TenantSummary) -> String {
     )
 }
 
+/// ` · 2 imports staged`, or nothing.
+fn staged_note(s: &pb::TenantSummary) -> String {
+    match s.staged.as_ref().filter(|staged| staged.sources > 0) {
+        Some(staged) => yellow(&format!(
+            " · {} staged",
+            count(staged.sources.into(), "import", "imports")
+        )),
+        None => String::new(),
+    }
+}
+
+/// What waits for `\\commit`: `2 imports · 5 entities · 4 relations`.
+fn staged(staged: &pb::Staged) -> String {
+    format!(
+        "{} · {} · {}",
+        count(staged.sources.into(), "import", "imports"),
+        count(staged.entities.into(), "entity", "entities"),
+        count(staged.relations.into(), "relation", "relations")
+    )
+}
+
+/// The reply to `\\commit` (true) or `\\rollback` (false).
+pub fn committed(s: &pb::TenantSummary, commit: bool) -> String {
+    let what = s.staged.as_ref().map(staged).unwrap_or_default();
+    match commit {
+        true => format!("committed {what}: {} now has {}", s.name, summary(s)),
+        false => format!("rolled back {what}: {} is back to {}", s.name, summary(s)),
+    }
+}
+
 // ---------------------------------------------------------------------------------------
 // Import, event by event
 
@@ -584,6 +614,7 @@ pub fn tenant_list(list: &pb::TenantList, current: Option<&str>) -> String {
                     line.push_str(&dim(&format!(" · ${dollars:.4}")));
                 }
             }
+            line.push_str(&staged_note(t));
             line
         })
         .collect::<Vec<_>>()
@@ -603,6 +634,15 @@ pub fn overview(o: &pb::Overview, session: &pb::Cost) -> String {
             s.pending_reask
         )],
     ));
+    if let Some(waiting) = s.staged.as_ref().filter(|staged| staged.sources > 0) {
+        out.push(row(
+            "staged",
+            &[yellow(&format!(
+                "{} waiting (\\commit or \\rollback)",
+                staged(waiting)
+            ))],
+        ));
+    }
     let entities: Vec<String> = match o.entities.is_empty() {
         true => vec![dim("none")],
         false => o
