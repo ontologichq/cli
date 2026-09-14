@@ -63,10 +63,12 @@ fn args() -> Result<Args, String> {
 
 fn interactive(cli: &mut Cli) -> rustyline::Result<()> {
     use rustyline::error::ReadlineError;
-    let mut editor = rustyline::Editor::<input::Colors, rustyline::history::DefaultHistory>::new()?;
-    if paint::is_on() {
-        editor.set_helper(Some(input::Colors));
-    }
+    let config = rustyline::Config::builder()
+        .completion_type(rustyline::CompletionType::List)
+        .build();
+    let mut editor =
+        rustyline::Editor::<input::Line, rustyline::history::DefaultHistory>::with_config(config)?;
+    editor.set_helper(Some(input::Line::new(cli.names.clone(), paint::is_on())));
     let _ = editor.load_history(HISTORY);
     loop {
         match editor.readline(&cli.prompt()) {
@@ -140,6 +142,7 @@ fn main() {
         host,
         current: None,
         session: pb::Cost::default(),
+        names: Default::default(),
     };
     say(&format!(
         "{} {}",

@@ -1,8 +1,10 @@
 //! What each command does: call the engine, then render the reply.
 
+use std::cell::RefCell;
 use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
+use std::rc::Rc;
 
 use brain_proto as pb;
 use tokio::runtime::Runtime;
@@ -49,6 +51,8 @@ pub struct Cli {
     pub host: String,
     pub current: Option<String>,
     pub session: pb::Cost,
+    /// What tab completes; filled from replies.
+    pub names: Rc<RefCell<input::Names>>,
 }
 
 fn add_cost(total: &mut pb::Cost, cost: &pb::Cost) {
@@ -73,6 +77,34 @@ impl Cli {
         self.current
             .clone()
             .ok_or_else(|| "no tenant: run \\t create <name> first".to_string())
+    }
+
+    /// Ids a reply named, for completion after `\\s`.
+    fn remember_ids<'a>(&self, ids: impl IntoIterator<Item = &'a String>) {
+        let known = &mut self.names.borrow_mut().ids;
+        for id in ids {
+            if !known.contains(id) {
+                known.push(id.clone());
+            }
+        }
+    }
+
+    /// The current tenant's entity and source ids, from its overview; nothing on an error.
+    fn load_ids(&self) {
+        let Some(tenant) = self.current.clone() else {
+            return;
+        };
+        let mut client = self.client.clone();
+        let request = pb::ShowRequest {
+            tenant,
+            id: String::new(),
+        };
+        self.names.borrow_mut().ids.clear();
+        if let Ok(reply) = self.rt.block_on(client.show(request))
+            && let Some(pb::show_reply::View::Overview(o)) = reply.into_inner().view
+        {
+            self.remember_ids(o.entities.iter().map(|e| &e.id).chain(&o.source_ids));
+        }
     }
 
     fn call<T>(&self, result: Result<tonic::Response<T>, Status>) -> Result<T, String> {
@@ -115,6 +147,14 @@ impl Cli {
                 ))
             )),
             Err(e) => say(&render::error(&e)),
+        }
+        if let Ok(list) = self.rt.block_on(client.list_tenants(pb::Empty {})) {
+            self.names.borrow_mut().tenants = list
+                .into_inner()
+                .tenants
+                .into_iter()
+                .map(|t| t.name)
+                .collect();
         }
         true
     }
@@ -163,6 +203,9 @@ impl Cli {
             "create" => {
                 let t = self.call(self.rt.block_on(client.create_tenant(named(arg)?)))?;
                 self.current = Some(t.name.clone());
+                let mut names = self.names.borrow_mut();
+                names.tenants.push(t.name.clone());
+                names.ids.clear();
                 Ok(format!("tenant {} created", paint::bold_blue(&t.name)))
             }
             "checkout" => {
@@ -173,10 +216,13 @@ impl Cli {
                         false => e,
                     })?;
                 self.current = Some(t.name.clone());
+                self.load_ids();
                 Ok(format!("tenant {}", paint::bold_blue(&t.name)))
             }
             "get" if arg.is_empty() => {
                 let list = self.call(self.rt.block_on(client.list_tenants(pb::Empty {})))?;
+                self.names.borrow_mut().tenants =
+                    list.tenants.iter().map(|t| t.name.clone()).collect();
                 Ok(render::tenant_list(&list, self.current.as_deref()))
             }
             "users" if arg.is_empty() => {
@@ -195,8 +241,13 @@ impl Cli {
             }
             "delete" => {
                 let t = self.call(self.rt.block_on(client.delete_tenant(named(arg)?)))?;
+                self.names
+                    .borrow_mut()
+                    .tenants
+                    .retain(|name| *name != t.name);
                 if self.current.as_deref() == Some(t.name.as_str()) {
                     self.current = None;
+                    self.names.borrow_mut().ids.clear();
                 }
                 Ok(format!("deleted {}: {}", t.name, render::summary(&t)))
             }
@@ -307,12 +358,21 @@ impl Cli {
                 Err(status) => return Err(describe(&status, &self.host)),
             };
             match event {
-                Event::Source(e) => say(&render::source_saved(&e)),
+                Event::Source(e) => {
+                    self.remember_ids([&e.id]);
+                    say(&render::source_saved(&e))
+                }
                 Event::Code(e) => say(&render::code_pass(&e)),
-                Event::Linked(e) => say(&render::linked_event(&e)),
+                Event::Linked(e) => {
+                    self.remember_ids(e.new_entities.iter().map(|n| &n.id));
+                    say(&render::linked_event(&e))
+                }
                 Event::Relinked(e) => say(&render::relinked(&e)),
                 Event::Reasked(e) => say(&render::reasked(&e)),
-                Event::People(e) => say(&render::people(&e)),
+                Event::People(e) => {
+                    self.remember_ids(e.new_entities.iter().map(|n| &n.id));
+                    say(&render::people(&e))
+                }
                 Event::Finished(e) => {
                     if let Some(cost) = &e.cost {
                         add_cost(&mut self.session, cost);
@@ -410,7 +470,11 @@ impl Cli {
         };
         let reply = self.call(self.rt.block_on(client.show(request)))?;
         Ok(match reply.view {
-            Some(View::Overview(o)) => render::overview(&o, &self.session),
+            Some(View::Overview(o)) => {
+                self.names.borrow_mut().ids.clear();
+                self.remember_ids(o.entities.iter().map(|e| &e.id).chain(&o.source_ids));
+                render::overview(&o, &self.session)
+            }
             Some(View::Entity(e)) => render::entity_view(&e),
             Some(View::Source(s)) => render::source_view(&s),
             None => String::new(),

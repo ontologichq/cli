@@ -1,9 +1,13 @@
-//! Commands as typed: parsing, and highlighting the line while it is being typed.
+//! Commands as typed: parsing, and highlighting and completing the line while it is being
+//! typed.
 
 use std::borrow::Cow;
+use std::cell::RefCell;
+use std::rc::Rc;
 
+use rustyline::completion::{Completer, FilenameCompleter, Pair};
 use rustyline::highlight::{CmdKind, Highlighter};
-use rustyline::{Completer, Helper, Hinter, Validator};
+use rustyline::{Context, Helper, Hinter, Validator};
 
 use crate::paint::ansi;
 
@@ -173,12 +177,116 @@ pub fn highlight_line(line: &str) -> String {
     out
 }
 
-#[derive(Completer, Helper, Hinter, Validator)]
-pub struct Colors;
+/// Names the CLI has seen in the engine's replies, kept for tab completion, so a tab never
+/// waits on the network.
+#[derive(Default)]
+pub struct Names {
+    pub tenants: Vec<String>,
+    /// Entity and source ids of the current tenant.
+    pub ids: Vec<String>,
+}
 
-impl Highlighter for Colors {
+/// What a tab completes at the cursor.
+#[derive(Debug, PartialEq)]
+enum Offer {
+    /// Where the word being completed starts, and the words that fit it.
+    Words(usize, Vec<String>),
+    Files,
+}
+
+/// The offer for the line up to the cursor: commands, then subcommands (both with a space
+/// after), tenant names where a tenant belongs, ids after `\s`, flags on a question, and file
+/// names where a file belongs.
+fn offer(before: &str, names: &Names) -> Offer {
+    let partial = match before.ends_with(char::is_whitespace) {
+        true => "",
+        false => before.split_whitespace().last().unwrap_or(""),
+    };
+    let start = before.len() - partial.len();
+    let fitting = |options: &[&str], after: &str| -> Vec<String> {
+        options
+            .iter()
+            .filter(|o| o.starts_with(partial))
+            .map(|o| format!("{o}{after}"))
+            .collect()
+    };
+    let known = |options: &[String]| -> Vec<String> {
+        options
+            .iter()
+            .filter(|o| o.starts_with(partial))
+            .cloned()
+            .collect()
+    };
+    let words: Vec<&str> = before[..start].split_whitespace().collect();
+    let offered = match words.as_slice() {
+        [] => fitting(COMMANDS, " "),
+        ["\\t"] => fitting(TENANT_SUBCOMMANDS, " "),
+        ["\\u"] => fitting(USER_SUBCOMMANDS, " "),
+        ["\\import"] => fitting(IMPORT_SUBCOMMANDS, " "),
+        ["\\t", "checkout" | "delete" | "meta"] | ["\\u", "grant" | "remove", _] => {
+            known(&names.tenants)
+        }
+        ["\\t", "import" | "export"] | ["\\import", "blob"] => return Offer::Files,
+        ["\\s"] => known(&names.ids),
+        ["\\ask", flags @ ..]
+            if partial.starts_with('-') && flags.iter().all(|f| f.starts_with("--")) =>
+        {
+            fitting(&["--staged", "--facts"], " ")
+        }
+        _ => Vec::new(),
+    };
+    Offer::Words(start, offered)
+}
+
+/// The line editor's helper: colors while typing (when color is on) and tab completion.
+#[derive(Helper, Hinter, Validator)]
+pub struct Line {
+    names: Rc<RefCell<Names>>,
+    color: bool,
+    files: FilenameCompleter,
+}
+
+impl Line {
+    pub fn new(names: Rc<RefCell<Names>>, color: bool) -> Self {
+        Line {
+            names,
+            color,
+            files: FilenameCompleter::new(),
+        }
+    }
+}
+
+impl Completer for Line {
+    type Candidate = Pair;
+
+    fn complete(
+        &self,
+        line: &str,
+        pos: usize,
+        _: &Context<'_>,
+    ) -> rustyline::Result<(usize, Vec<Pair>)> {
+        match offer(&line[..pos], &self.names.borrow()) {
+            Offer::Files => self.files.complete_path(line, pos),
+            Offer::Words(start, words) => Ok((
+                start,
+                words
+                    .into_iter()
+                    .map(|word| Pair {
+                        display: word.trim_end().to_string(),
+                        replacement: word,
+                    })
+                    .collect(),
+            )),
+        }
+    }
+}
+
+impl Highlighter for Line {
     fn highlight<'l>(&self, line: &'l str, _pos: usize) -> Cow<'l, str> {
-        Cow::Owned(highlight_line(line))
+        match self.color {
+            true => Cow::Owned(highlight_line(line)),
+            false => Cow::Borrowed(line),
+        }
     }
 
     fn highlight_prompt<'b, 's: 'b, 'p: 'b>(
@@ -186,20 +294,102 @@ impl Highlighter for Colors {
         prompt: &'p str,
         _default: bool,
     ) -> Cow<'b, str> {
-        match prompt.strip_suffix("> ") {
-            Some(name) => Cow::Owned(format!("{}{}", ansi("1;34", name), ansi("2", "> "))),
-            None => Cow::Borrowed(prompt),
+        match (self.color, prompt.strip_suffix("> ")) {
+            (true, Some(name)) => Cow::Owned(format!("{}{}", ansi("1;34", name), ansi("2", "> "))),
+            _ => Cow::Borrowed(prompt),
         }
     }
 
     fn highlight_char(&self, _line: &str, _pos: usize, _kind: CmdKind) -> bool {
-        true
+        self.color
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn names() -> Names {
+        Names {
+            tenants: vec!["acme".into(), "acme-2".into(), "beta".into()],
+            ids: vec!["e1".into(), "e12".into(), "s1".into()],
+        }
+    }
+
+    fn words(before: &str) -> Vec<String> {
+        match offer(before, &names()) {
+            Offer::Words(start, words) => {
+                assert!(before[start..].chars().all(|c| !c.is_whitespace()));
+                words
+            }
+            Offer::Files => panic!("{before:?} offers files"),
+        }
+    }
+
+    #[test]
+    fn completes_commands_and_subcommands() {
+        assert_eq!(words("\\co"), ["\\commit "]);
+        assert_eq!(words("").len(), COMMANDS.len());
+        assert_eq!(
+            offer("\\t c", &names()),
+            Offer::Words(3, vec!["create ".into(), "checkout ".into()])
+        );
+        assert_eq!(words("\\u g"), ["grant "]);
+        assert_eq!(words("\\import "), ["fact ", "blob "]);
+        assert!(words("\\q ").is_empty());
+    }
+
+    #[test]
+    fn completes_tenant_names_where_a_tenant_belongs() {
+        assert_eq!(words("\\t checkout ac"), ["acme", "acme-2"]);
+        assert_eq!(words("\\t meta b"), ["beta"]);
+        assert_eq!(words("\\t delete "), ["acme", "acme-2", "beta"]);
+        assert_eq!(words("\\u grant tomas a"), ["acme", "acme-2"]);
+        assert!(words("\\u grant a").is_empty(), "a user name comes first");
+        assert!(
+            words("\\t create a").is_empty(),
+            "a new tenant has a new name"
+        );
+        assert!(words("\\t users ").is_empty());
+    }
+
+    #[test]
+    fn completes_ids_after_show() {
+        assert_eq!(words("\\s e1"), ["e1", "e12"]);
+        assert_eq!(words("\\s s"), ["s1"]);
+        assert!(words("\\s e1 ").is_empty());
+    }
+
+    #[test]
+    fn completes_file_names_after_import_and_export() {
+        // Tests run in the crate directory, which has a Cargo.toml.
+        let line = Line::new(Rc::new(RefCell::new(names())), false);
+        let history = rustyline::history::DefaultHistory::new();
+        for typed in [
+            "\\t export Cargo.to",
+            "\\t import Cargo.to",
+            "\\import blob Cargo.to",
+        ] {
+            let (start, found) = line
+                .complete(typed, typed.len(), &Context::new(&history))
+                .unwrap();
+            assert_eq!(start, typed.len() - "Cargo.to".len());
+            let found: Vec<&str> = found.iter().map(|p| p.replacement.as_str()).collect();
+            assert_eq!(found, ["Cargo.toml"]);
+        }
+        assert_eq!(
+            offer("\\import fact Cargo", &names()),
+            Offer::Words(13, Vec::new())
+        );
+    }
+
+    #[test]
+    fn completes_the_flags_on_a_question() {
+        assert_eq!(words("\\ask --s"), ["--staged "]);
+        assert_eq!(words("\\ask --facts --"), ["--staged ", "--facts "]);
+        assert!(words("\\ask who is -").is_empty());
+        assert!(words("\\ask who").is_empty());
+    }
 
     #[test]
     fn parses_commands_and_trimmed_text() {
