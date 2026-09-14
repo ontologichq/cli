@@ -221,6 +221,23 @@ pub fn source_saved(e: &pb::SourceSaved) -> String {
     )
 }
 
+/// `\\v`: the engine's build and the CLI's.
+pub fn version(host: &str, health: &pb::HealthReply, cli: &str) -> String {
+    let engine = match health.version.is_empty() {
+        true => dim("older than \\v"),
+        false => health.version.clone(),
+    };
+    [
+        header("version"),
+        row(
+            "engine",
+            &[format!("{engine} {}", dim(&format!("({host})")))],
+        ),
+        row("cli", &[cli.to_string()]),
+    ]
+    .join("\n")
+}
+
 /// The people an email's headers name, linked before any model call.
 pub fn people(e: &pb::People) -> String {
     let mut lines: Vec<String> = e

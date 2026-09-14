@@ -29,6 +29,7 @@ pub const HELP: &str = "\
 \\u add <user>         admins: add a member and print their key once
 \\u grant <user> <t>   admins: let a member use tenant <t>
 \\u remove <user> <t>  admins: take that access away
+\\v                    the engine's version and this CLI's
 \\h                    this help
 \\q                    quit (Ctrl-D works too)
 Up and down arrows walk the history.";
@@ -128,10 +129,18 @@ impl Cli {
             Command::Ask("") => Err("usage: \\ask <question>".into()),
             Command::Ask(text) => self.ask(text).map(|()| None),
             Command::Show(id) => self.show(id).map(Some),
+            Command::Version => self.version().map(Some),
             Command::Help => Ok(Some(HELP.to_string())),
             Command::Quit => unreachable!("handled by the loop"),
             Command::Unknown(name) => Err(format!("unknown command {name}, see \\h")),
         }
+    }
+
+    /// `\\v`: which build of the engine answers, and which build of the CLI asks.
+    fn version(&self) -> Result<String, String> {
+        let mut client = self.client.clone();
+        let health = self.call(self.rt.block_on(client.health(pb::Empty {})))?;
+        Ok(render::version(&self.host, &health, env!("BRAIN_VERSION")))
     }
 
     fn tenant_command(&mut self, sub: &str, arg: &str) -> Result<String, String> {

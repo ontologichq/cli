@@ -16,12 +16,15 @@ pub enum Command<'a> {
     Import(&'a str, &'a str),
     Ask(&'a str),
     Show(&'a str),
+    Version,
     Help,
     Quit,
     Unknown(&'a str),
 }
 
-pub const COMMANDS: &[&str] = &["\\t", "\\u", "\\import", "\\ask", "\\s", "\\h", "\\q"];
+pub const COMMANDS: &[&str] = &[
+    "\\t", "\\u", "\\import", "\\ask", "\\s", "\\v", "\\h", "\\q",
+];
 pub const TENANT_SUBCOMMANDS: &[&str] = &[
     "create", "checkout", "get", "delete", "import", "export", "users",
 ];
@@ -66,6 +69,7 @@ pub fn parse(line: &str) -> Option<Command<'_>> {
         }
         "\\ask" => Command::Ask(unquote(rest)),
         "\\s" => Command::Show(rest),
+        "\\v" => Command::Version,
         "\\h" => Command::Help,
         "\\q" => Command::Quit,
         other => Command::Unknown(other),
