@@ -116,6 +116,41 @@ fn relation(r: &pb::Relation) -> String {
     )
 }
 
+/// `s5 90% "Tomas still lives in Toronto"`, the words cut to 60 characters.
+fn evidence_line(e: &pb::Evidence) -> String {
+    let mut words: String = e.text.chars().take(60).collect();
+    if e.text.chars().count() > 60 {
+        words.push('…');
+    }
+    format!(
+        "{} {} {}",
+        dim(&e.source_id),
+        percent(e.confidence),
+        dim(&format!("\"{words}\""))
+    )
+}
+
+/// A fact that gained evidence: the evidence and what the fact is now.
+fn more_evidence(m: &pb::MoreEvidence) -> String {
+    let (Some(r), Some(e)) = (&m.relation, &m.evidence) else {
+        return String::new();
+    };
+    format!(
+        "{} {} {} {} {} {} {}",
+        dim(&r.id),
+        bold(&r.subject_name),
+        magenta(&r.predicate),
+        bold(&r.object_name),
+        dim("+"),
+        evidence_line(e),
+        dim(&format!("(fact now {})", percent_plain(r.confidence)))
+    )
+}
+
+fn percent_plain(value: f32) -> String {
+    format!("{}%", (value * 100.0).round() as i32)
+}
+
 pub fn cost(cost: &pb::Cost) -> String {
     let mut parts = vec![
         count(cost.calls, "call", "calls"),
@@ -252,6 +287,9 @@ pub fn linked_event(e: &pb::Linked) -> String {
     for r in &e.new_relations {
         out.push(row("new", &[relation(r)]));
     }
+    for m in &e.more_evidence {
+        out.push(row("more", &[more_evidence(m)]));
+    }
     out.push(row("linked", &[linked(&e.segments)]));
     out.join("\n")
 }
@@ -295,6 +333,11 @@ pub fn reasked(e: &pb::Reasked) -> String {
         e.new_relations
             .iter()
             .map(|r| format!("{id} new {}", relation(r))),
+    );
+    lines.extend(
+        e.more_evidence
+            .iter()
+            .map(|m| format!("{id} more {}", more_evidence(m))),
     );
     row("reask", &lines)
 }
@@ -542,15 +585,13 @@ pub fn entity_view(v: &pb::EntityView) -> String {
     out.push(row("about", std::slice::from_ref(&e.description)));
     let relations: Vec<String> = match v.relations.is_empty() {
         true => vec![dim("none")],
+        // Each fact, then one line per piece of evidence behind it.
         false => v
             .relations
             .iter()
-            .map(|r| {
-                format!(
-                    "{} {}",
-                    relation(r),
-                    dim(&format!("· from {}", r.source_id))
-                )
+            .flat_map(|r| {
+                std::iter::once(relation(r))
+                    .chain(r.evidence.iter().map(|e| format!("  {}", evidence_line(e))))
             })
             .collect(),
     };
