@@ -171,6 +171,29 @@ pub fn code_pass(e: &pb::CodePass) -> String {
     row("code", &lines)
 }
 
+/// `4 found · 1 asked again · 1 left out: "work"`.
+fn phrases(p: &pb::Phrases) -> String {
+    let quoted = |list: &[String]| {
+        list.iter()
+            .map(|t| format!("\"{t}\""))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mut parts = vec![format!("{} found", p.found.len())];
+    if !p.follow_up.is_empty() {
+        parts.push(format!("{} asked again", p.follow_up.len()));
+    }
+    parts.push(match p.undecided.is_empty() {
+        true => green("all decided"),
+        false => yellow(&format!(
+            "{} left out: {}",
+            p.undecided.len(),
+            quoted(&p.undecided)
+        )),
+    });
+    parts.join(" · ")
+}
+
 pub fn linked_event(e: &pb::Linked) -> String {
     let mut out = Vec::new();
     let llm: Vec<String> = match (e.llm_error.is_empty(), e.mentions.is_empty()) {
@@ -202,6 +225,9 @@ pub fn linked_event(e: &pb::Linked) -> String {
                 }
             )],
         ));
+        if let Some(p) = &e.phrases {
+            out.push(row("phrases", &[phrases(p)]));
+        }
     }
     for entity in &e.new_entities {
         out.push(row(
