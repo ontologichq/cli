@@ -209,6 +209,41 @@ pub fn source_saved(e: &pb::SourceSaved) -> String {
     )
 }
 
+/// The people an email's headers name, linked before any model call.
+pub fn people(e: &pb::People) -> String {
+    let mut lines: Vec<String> = e
+        .new_entities
+        .iter()
+        .map(|p| {
+            format!(
+                "{} {} {}",
+                entity_ref(&p.id, &p.name),
+                dim(&p
+                    .aliases
+                    .iter()
+                    .filter(|a| **a != p.name)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")),
+                green("new")
+            )
+        })
+        .collect();
+    lines.extend(e.known.iter().map(|p| entity_ref(&p.id, &p.name)));
+    for alias in &e.new_aliases {
+        lines.push(format!(
+            "\"{}\" → {}",
+            cyan(&alias.alias),
+            entity_ref(&alias.entity_id, &alias.entity_name)
+        ));
+    }
+    if lines.is_empty() {
+        lines.push(dim("no names in the headers"));
+    }
+    let head = row("people", &lines);
+    format!("{head}\n{}", row("messages", &[e.messages.to_string()]))
+}
+
 pub fn code_pass(e: &pb::CodePass) -> String {
     let mut out = String::new();
     if e.part > 0 {

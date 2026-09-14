@@ -277,6 +277,7 @@ impl Cli {
                 Event::Linked(e) => say(&render::linked_event(&e)),
                 Event::Relinked(e) => say(&render::relinked(&e)),
                 Event::Reasked(e) => say(&render::reasked(&e)),
+                Event::People(e) => say(&render::people(&e)),
                 Event::Finished(e) => {
                     if let Some(cost) = &e.cost {
                         add_cost(&mut self.session, cost);
