@@ -294,6 +294,7 @@ impl Cli {
         let request = pb::AskRequest {
             tenant,
             question: question.to_string(),
+            graph_only: false,
         };
         let mut stream = self.call(self.rt.block_on(client.ask(request)))?;
         loop {
