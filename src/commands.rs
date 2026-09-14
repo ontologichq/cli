@@ -27,6 +27,7 @@ pub const HELP: &str = "\
 \\import blob <file>  add a file from this directory: an email (.eml) or text, part by part
 \\ask <question>       answer from what the tenant has committed, with probabilities
 \\ask --staged <q>     answer with the imports not committed yet included
+\\ask --facts <q>      answer from facts alone, with no source text: what the graph holds
 \\commit               make the staged imports part of the tenant, so questions see them
 \\rollback             drop the staged imports (and the re-links they made)
 \\s                    what the tenant knows, and what it cost
@@ -418,7 +419,7 @@ impl Cli {
             };
             match event {
                 Event::Index(e) => say(&render::ask_index(question, &e)),
-                Event::Answer(e) => say(&render::ask_answer(&e)),
+                Event::Answer(e) => say(&render::ask_answer(&e, q.facts)),
                 Event::Finished(e) => {
                     if let Some(cost) = &e.cost {
                         add_cost(&mut self.session, cost);

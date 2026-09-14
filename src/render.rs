@@ -543,7 +543,9 @@ pub fn ask_index(question: &str, e: &pb::AskIndex) -> String {
     .join("\n")
 }
 
-pub fn ask_answer(e: &pb::AskAnswer) -> String {
+/// The answer, then what it rests on: `facts only (--facts)` when no source text was given, or
+/// the sources the kept options cite.
+pub fn ask_answer(e: &pb::AskAnswer, facts: bool) -> String {
     if !e.error.is_empty() {
         return row("answer", &[red(&format!("✗ error: {}", e.error))]);
     }
@@ -598,6 +600,24 @@ pub fn ask_answer(e: &pb::AskAnswer) -> String {
     if !e.notes.is_empty() {
         let notes: Vec<String> = e.notes.iter().map(|n| yellow(n)).collect();
         out.push(row("check", &notes));
+    }
+    let mut sources: Vec<&str> = Vec::new();
+    for citation in e.options.iter().flat_map(|o| &o.based_on) {
+        let source = citation
+            .id
+            .strip_prefix('s')
+            .is_some_and(|n| n.parse::<u32>().is_ok());
+        if source && !sources.contains(&citation.id.as_str()) {
+            sources.push(&citation.id);
+        }
+    }
+    match (facts, sources.is_empty()) {
+        (true, _) => out.push(row("basis", &[dim("facts only (--facts)")])),
+        (false, false) => out.push(row(
+            "basis",
+            &[dim(&format!("cites {}", sources.join(", ")))],
+        )),
+        (false, true) => {}
     }
     out.join("\n")
 }
