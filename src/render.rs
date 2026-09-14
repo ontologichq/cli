@@ -187,14 +187,44 @@ pub fn summary(s: &pb::TenantSummary) -> String {
 // Import, event by event
 
 pub fn source_saved(e: &pb::SourceSaved) -> String {
+    if e.kind.is_empty() || e.kind == "fact" {
+        return format!(
+            "{}\n{}",
+            header(&format!("import {}", e.id)),
+            row("source", std::slice::from_ref(&e.text))
+        );
+    }
     format!(
         "{}\n{}",
-        header(&format!("import {}", e.id)),
-        row("source", std::slice::from_ref(&e.text))
+        header(&format!("import {} {}", e.id, e.name)),
+        row(
+            "source",
+            &[format!(
+                "{} · {} · {} bytes",
+                e.kind,
+                count(u64::from(e.parts), "part", "parts"),
+                e.text.len()
+            )]
+        )
     )
 }
 
 pub fn code_pass(e: &pb::CodePass) -> String {
+    let mut out = String::new();
+    if e.part > 0 {
+        let mut words: String = e.text.chars().take(60).collect();
+        if e.text.chars().count() > 60 {
+            words.push('…');
+        }
+        out = row(
+            "part",
+            &[format!(
+                "{} {}",
+                bold(&e.part.to_string()),
+                dim(&format!("\"{words}\""))
+            )],
+        ) + "\n";
+    }
     let lines: Vec<String> = match e.matches.is_empty() {
         true => vec![dim("no known names")],
         false => e
@@ -203,7 +233,7 @@ pub fn code_pass(e: &pb::CodePass) -> String {
             .map(|m| format!("\"{}\" → {}", m.text, guess_list(&m.guesses)))
             .collect(),
     };
-    row("code", &lines)
+    out + &row("code", &lines)
 }
 
 /// `4 found · 1 asked again · 1 left out: "work"`.

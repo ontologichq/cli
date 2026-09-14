@@ -12,7 +12,8 @@ pub enum Command<'a> {
     Tenant(&'a str, &'a str),
     /// `\u <subcommand> [user [tenant]]`
     User(&'a str, &'a str),
-    Import(&'a str),
+    /// `\\import fact <sentence>` or `\\import blob <file>`
+    Import(&'a str, &'a str),
     Ask(&'a str),
     Show(&'a str),
     Help,
@@ -25,6 +26,7 @@ pub const TENANT_SUBCOMMANDS: &[&str] = &[
     "create", "checkout", "get", "delete", "import", "export", "users",
 ];
 pub const USER_SUBCOMMANDS: &[&str] = &["me", "add", "grant", "remove"];
+pub const IMPORT_SUBCOMMANDS: &[&str] = &["fact", "blob"];
 
 /// "import Priya lives here" -> ("import", "Priya lives here").
 pub fn split_word(text: &str) -> (&str, &str) {
@@ -58,7 +60,10 @@ pub fn parse(line: &str) -> Option<Command<'_>> {
             let (sub, rest) = split_word(rest);
             Command::User(sub, rest)
         }
-        "\\import" => Command::Import(unquote(rest)),
+        "\\import" => {
+            let (sub, rest) = split_word(rest);
+            Command::Import(sub, unquote(rest))
+        }
         "\\ask" => Command::Ask(unquote(rest)),
         "\\s" => Command::Show(rest),
         "\\h" => Command::Help,
@@ -99,10 +104,11 @@ pub fn highlight_line(line: &str) -> String {
         return out;
     }
     match command {
-        "\\t" | "\\u" => {
+        "\\t" | "\\u" | "\\import" => {
             let subcommands = match command {
                 "\\t" => TENANT_SUBCOMMANDS,
-                _ => USER_SUBCOMMANDS,
+                "\\u" => USER_SUBCOMMANDS,
+                _ => IMPORT_SUBCOMMANDS,
             };
             let word_end = body.find(char::is_whitespace).unwrap_or(body.len());
             let (word, tail) = body.split_at(word_end);
@@ -118,7 +124,7 @@ pub fn highlight_line(line: &str) -> String {
                 out.push_str(&ansi(TEXT, text));
             }
         }
-        "\\import" | "\\ask" | "\\s" => out.push_str(&ansi(TEXT, body)),
+        "\\ask" | "\\s" => out.push_str(&ansi(TEXT, body)),
         _ => out.push_str(body),
     }
     out
@@ -155,8 +161,8 @@ mod tests {
     #[test]
     fn parses_commands_and_trimmed_text() {
         assert!(matches!(
-            parse("  \\import  \"Priya went to Acme.\"  "),
-            Some(Command::Import("Priya went to Acme."))
+            parse("  \\import fact  \"Priya went to Acme.\"  "),
+            Some(Command::Import("fact", "Priya went to Acme."))
         ));
         assert!(matches!(
             parse("\\ask who is Priya"),

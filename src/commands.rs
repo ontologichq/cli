@@ -20,7 +20,8 @@ pub const HELP: &str = "\
 \\t export <file>      save the tenant to a .ttl file in this directory
 \\t import <file>      load a .ttl file into the current (empty) tenant
 \\t users              who can use the current tenant
-\\import <sentence>    add a fact: link names, find relations, re-link older sources
+\\import fact <text>  add a fact: link things, find relations, re-link older sources
+\\import blob <file>  add a file from this directory: an email (.eml) or text, part by part
 \\ask <question>       answer from what the tenant knows, with probabilities
 \\s                    what the tenant knows, and what it cost
 \\s <id>               everything about an entity (e1) or a source (s1)
@@ -32,6 +33,7 @@ pub const HELP: &str = "\
 \\q                    quit (Ctrl-D works too)
 Up and down arrows walk the history.";
 
+const IMPORT_USAGE: &str = "usage: \\import fact <sentence> | \\import blob <file>";
 const TENANT_USAGE: &str = "usage: \\t create <name> | \\t checkout <name> | \\t get | \\t delete <name> | \\t export <file> | \\t import <file> | \\t users";
 const USER_USAGE: &str =
     "usage: \\u me | \\u add <user> | \\u grant <user> <tenant> | \\u remove <user> <tenant>";
@@ -115,8 +117,13 @@ impl Cli {
         match command {
             Command::Tenant(sub, arg) => self.tenant_command(sub, arg).map(Some),
             Command::User(sub, rest) => self.user_command(sub, rest).map(Some),
-            Command::Import("") => Err("usage: \\import <sentence>".into()),
-            Command::Import(text) => self.import(text).map(|()| None),
+            Command::Import("fact", text) if !text.is_empty() => {
+                self.import_fact(text).map(|()| None)
+            }
+            Command::Import("blob", file) if !file.is_empty() => {
+                self.import_blob(file).map(|()| None)
+            }
+            Command::Import(..) => Err(IMPORT_USAGE.into()),
             Command::Ask("") => Err("usage: \\ask <question>".into()),
             Command::Ask(text) => self.ask(text).map(|()| None),
             Command::Show(id) => self.show(id).map(Some),
@@ -220,15 +227,42 @@ impl Cli {
         }
     }
 
-    fn import(&mut self, text: &str) -> Result<(), String> {
-        use pb::import_event::Event;
+    fn import_fact(&mut self, text: &str) -> Result<(), String> {
         let tenant = self.tenant()?;
         let mut client = self.client.clone();
         let request = pb::ImportRequest {
             tenant,
             text: text.to_string(),
         };
-        let mut stream = self.call(self.rt.block_on(client.import(request)))?;
+        let stream = self.call(self.rt.block_on(client.import(request)))?;
+        self.follow_import(stream)
+    }
+
+    /// Sends a file from the CLI's directory; the engine reads it by its name.
+    fn import_blob(&mut self, file: &str) -> Result<(), String> {
+        let tenant = self.tenant()?;
+        let content = fs::read(file).map_err(|e| format!("{file}: {e}"))?;
+        let name = Path::new(file)
+            .file_name()
+            .map_or(file.to_string(), |n| n.to_string_lossy().to_string());
+        let mut client = self.client.clone();
+        let request = pb::BlobRequest {
+            tenant,
+            name,
+            content,
+        };
+        let stream = self
+            .call(self.rt.block_on(client.import_blob(request)))
+            .map_err(|e| format!("{file}: {e}"))?;
+        self.follow_import(stream)
+    }
+
+    /// Prints each stage of an import as it arrives.
+    fn follow_import(
+        &mut self,
+        mut stream: tonic::Streaming<pb::ImportEvent>,
+    ) -> Result<(), String> {
+        use pb::import_event::Event;
         loop {
             let next = self.rt.block_on(stream.message());
             let event = match next {
