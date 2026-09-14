@@ -284,6 +284,13 @@ pub fn version(host: &str, health: &pb::HealthReply, cli: &str) -> String {
             &[format!("{engine} {}", dim(&format!("({host})")))],
         ),
         row("cli", &[cli.to_string()]),
+        row(
+            "models",
+            &[format!(
+                "llm {} · tagger {} · embedder {}",
+                health.llm, health.tagger, health.embedder
+            )],
+        ),
     ]
     .join("\n")
 }
@@ -792,10 +799,11 @@ pub fn meta(m: &pb::Meta) -> String {
     out.push(row(
         "wrote",
         &[format!(
-            "{} · llm {} · tagger {}",
+            "{} · llm {} · tagger {} · embedder {}",
             unknown(&m.version),
             unknown(&m.llm),
-            unknown(&m.tagger)
+            unknown(&m.tagger),
+            unknown(&m.embedder)
         )],
     ));
     out.join("\n")

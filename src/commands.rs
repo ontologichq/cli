@@ -132,11 +132,12 @@ impl Cli {
         let signed_in = format!("signed in as {} ({})", paint::bold(&me.name), me.role);
         match self.call(self.rt.block_on(client.health(pb::Empty {}))) {
             Ok(h) if h.llm_error.is_empty() => say(&format!(
-                "{} {} · llm {} · tagger {} · {signed_in}",
+                "{} {} · llm {} · tagger {} · embedder {} · {signed_in}",
                 paint::dim("engine:"),
                 paint::bold(&self.host),
                 paint::cyan(&h.llm),
-                paint::cyan(&h.tagger)
+                paint::cyan(&h.tagger),
+                paint::cyan(&h.embedder)
             )),
             Ok(h) => say(&format!(
                 "{} {} · {signed_in}\n{}",
