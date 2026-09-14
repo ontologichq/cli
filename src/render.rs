@@ -101,6 +101,18 @@ fn decision(d: &pb::Decision, quote: bool) -> String {
     }
 }
 
+/// An entity's name in bold, or a value in quotes with its kind: `"$8,000" money`.
+fn object(r: &pb::Relation) -> String {
+    match r.object_id.is_empty() {
+        true => format!(
+            "{} {}",
+            cyan(&format!("\"{}\"", r.object_name)),
+            dim(&r.object_kind)
+        ),
+        false => bold(&r.object_name),
+    }
+}
+
 fn relation(r: &pb::Relation) -> String {
     let fresh = match r.new_type {
         true => dim(" (new relation type)"),
@@ -111,7 +123,7 @@ fn relation(r: &pb::Relation) -> String {
         dim(&r.id),
         bold(&r.subject_name),
         magenta(&r.predicate),
-        bold(&r.object_name),
+        object(r),
         percent(r.confidence)
     )
 }
@@ -140,7 +152,7 @@ fn more_evidence(m: &pb::MoreEvidence) -> String {
         dim(&r.id),
         bold(&r.subject_name),
         magenta(&r.predicate),
-        bold(&r.object_name),
+        object(r),
         dim("+"),
         evidence_line(e),
         dim(&format!("(fact now {})", percent_plain(r.confidence)))
@@ -237,6 +249,7 @@ pub fn people(e: &pb::People) -> String {
             entity_ref(&alias.entity_id, &alias.entity_name)
         ));
     }
+    lines.extend(e.new_relations.iter().map(relation));
     if lines.is_empty() {
         lines.push(dim("no names in the headers"));
     }
@@ -271,15 +284,18 @@ pub fn code_pass(e: &pb::CodePass) -> String {
     out + &row("code", &lines)
 }
 
-/// `4 found · 1 asked again · 1 left out: "work"`.
-fn phrases(p: &pb::Phrases) -> String {
+/// `4 candidates · 1 asked again · 1 left out: "Brightline"`.
+fn checklist(p: &pb::Checklist) -> String {
+    if !p.error.is_empty() {
+        return red(&format!("✗ error: {}", p.error));
+    }
     let quoted = |list: &[String]| {
         list.iter()
             .map(|t| format!("\"{t}\""))
             .collect::<Vec<_>>()
             .join(", ")
     };
-    let mut parts = vec![format!("{} found", p.found.len())];
+    let mut parts = vec![count(p.found.len() as u64, "candidate", "candidates")];
     if !p.follow_up.is_empty() {
         parts.push(format!("{} asked again", p.follow_up.len()));
     }
@@ -325,8 +341,8 @@ pub fn linked_event(e: &pb::Linked) -> String {
                 }
             )],
         ));
-        if let Some(p) = &e.phrases {
-            out.push(row("phrases", &[phrases(p)]));
+        if let Some(p) = &e.checklist {
+            out.push(row("tagger", &[checklist(p)]));
         }
     }
     for entity in &e.new_entities {
@@ -335,7 +351,7 @@ pub fn linked_event(e: &pb::Linked) -> String {
             &[format!(
                 "{} {}",
                 entity_ref(&entity.id, &entity.name),
-                dim(&format!("({})", entity.description))
+                dim(&format!("({}: {})", entity.kind, entity.description))
             )],
         ));
     }
@@ -647,6 +663,7 @@ pub fn entity_view(v: &pb::EntityView) -> String {
             .collect::<Vec<_>>()
             .join(", ")],
     ));
+    out.push(row("kind", std::slice::from_ref(&e.kind)));
     out.push(row("about", std::slice::from_ref(&e.description)));
     let relations: Vec<String> = match v.relations.is_empty() {
         true => vec![dim("none")],
