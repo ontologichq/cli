@@ -536,8 +536,12 @@ pub fn ask_answer(e: &pb::AskAnswer) -> String {
             ))
         )),
         false => lines.push(dim(&format!(
-            "something else {}%",
-            (e.something_else * 100.0).round() as i32
+            "something else {}%{}",
+            (e.something_else * 100.0).round() as i32,
+            match e.exclusive {
+                true => "",
+                false => " · the answers can all be right, each has its own chance",
+            }
         ))),
     }
     let mut out = vec![row("answer", &lines)];
