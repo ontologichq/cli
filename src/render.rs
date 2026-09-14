@@ -163,6 +163,23 @@ fn percent_plain(value: f32) -> String {
     format!("{}%", (value * 100.0).round() as i32)
 }
 
+/// `$0.0123`, or `<$0.0001` for a cost too small to show.
+fn dollars(dollars: f64) -> String {
+    match dollars > 0.0 && dollars < 0.00005 {
+        true => "<$0.0001".to_string(),
+        false => format!("${dollars:.4}"),
+    }
+}
+
+/// `41.2 KB`.
+fn bytes(n: u64) -> String {
+    match n {
+        0..1_000 => format!("{n} B"),
+        1_000..1_000_000 => format!("{:.1} KB", n as f64 / 1e3),
+        _ => format!("{:.1} MB", n as f64 / 1e6),
+    }
+}
+
 pub fn cost(cost: &pb::Cost) -> String {
     let mut parts = vec![
         count(cost.calls, "call", "calls"),
@@ -178,11 +195,8 @@ pub fn cost(cost: &pb::Cost) -> String {
         ),
         format!("{:.1} s", cost.seconds),
     ];
-    if let Some(dollars) = cost.dollars {
-        parts.push(match dollars > 0.0 && dollars < 0.00005 {
-            true => "<$0.0001".to_string(),
-            false => format!("${dollars:.4}"),
-        });
+    if let Some(d) = cost.dollars {
+        parts.push(dollars(d));
     }
     let mut line = dim(&parts.join(" · "));
     if cost.unreported_calls > 0 {
@@ -619,6 +633,117 @@ pub fn tenant_list(list: &pb::TenantList, current: Option<&str>) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// `\\t meta`: the committed tenant by kind, its files, its dates, and what it has cost.
+pub fn meta(m: &pb::Meta) -> String {
+    let kinds = |total: usize, counts: &[pb::KindCount]| {
+        let each: Vec<String> = counts
+            .iter()
+            .filter(|k| k.count > 0)
+            .map(|k| format!("{} {}", k.count, k.kind))
+            .collect();
+        match each.is_empty() {
+            true => total.to_string(),
+            false => format!("{total}: {}", each.join(" · ")),
+        }
+    };
+    let total = |counts: &[pb::KindCount]| counts.iter().map(|k| k.count as usize).sum();
+    let unknown = |text: &str| match text.is_empty() {
+        true => dim("unknown"),
+        false => text.to_string(),
+    };
+    let mut out = vec![header(&format!("meta {}", m.tenant))];
+    out.push(row(
+        "tenant",
+        &[match m.created.is_empty() {
+            true => dim("not written since meta was kept"),
+            false => format!("created {} · updated {}", m.created, m.updated),
+        }],
+    ));
+    out.push(row(
+        "files",
+        &[format!(
+            "tenant {} · staged {} · source text {}",
+            bytes(m.file_bytes),
+            bytes(m.staged_bytes),
+            bytes(m.source_bytes)
+        )],
+    ));
+    out.push(row("entities", &[kinds(total(&m.entities), &m.entities)]));
+    out.push(row("sources", &[kinds(total(&m.sources), &m.sources)]));
+    out.push(row(
+        "facts",
+        &[format!(
+            "{} · {} end in a value · {}",
+            m.facts,
+            m.value_facts,
+            count(m.relation_types.into(), "relation type", "relation types")
+        )],
+    ));
+    out.push(row(
+        "links",
+        &[format!(
+            "{} · {} unplaced · {} unsettled · {} waiting for a relation pass",
+            count(m.mentions.into(), "mention", "mentions"),
+            m.unplaced,
+            m.unsettled,
+            count(m.pending_reask.into(), "part", "parts")
+        )],
+    ));
+    if let Some(waiting) = m.staged.as_ref().filter(|staged| staged.sources > 0) {
+        out.push(row(
+            "staged",
+            &[yellow(&format!(
+                "{} waiting (\\commit or \\rollback)",
+                staged(waiting)
+            ))],
+        ));
+    }
+    let average = |n: u64, one: &str, many: &str, c: Option<pb::Cost>| {
+        let c = c.unwrap_or_default();
+        if n == 0 {
+            return vec![dim(&format!("no {many} yet"))];
+        }
+        let each = c.dollars.map(|d| format!("{} and ", dollars(d / n as f64)));
+        vec![
+            format!(
+                "{} · {}{:.1} s per {one} on average",
+                count(n, one, many),
+                each.unwrap_or_default(),
+                c.seconds / n as f64
+            ),
+            format!("{} {}", dim("total"), cost(&c)),
+        ]
+    };
+    out.push(row(
+        "imports",
+        &average(m.imports, "import", "imports", m.import_cost),
+    ));
+    out.push(row(
+        "asks",
+        &average(m.questions, "question", "questions", m.question_cost),
+    ));
+    if let Some(run) = &m.run {
+        out.push(row(
+            "run",
+            &[format!(
+                "{} {}",
+                cost(run),
+                dim("(since the engine started)")
+            )],
+        ));
+    }
+    out.push(row(
+        "wrote",
+        &[format!(
+            "{} · llm {} · tagger {}",
+            unknown(&m.version),
+            unknown(&m.llm),
+            unknown(&m.tagger)
+        )],
+    ));
+    out.join("\n")
 }
 
 pub fn overview(o: &pb::Overview, session: &pb::Cost) -> String {

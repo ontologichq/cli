@@ -20,6 +20,7 @@ pub const HELP: &str = "\
 \\t export <file>      save the tenant to a .ttl file in this directory
 \\t import <file>      load a .ttl file into the current (empty) tenant
 \\t users              who can use the current tenant
+\\t meta [name]        a tenant's counts, files, dates, and cost per import and question
 \\import fact <text>  add a fact: link things, find relations, re-link older sources
 \\import blob <file>  add a file from this directory: an email (.eml) or text, part by part
 \\ask <question>       answer from what the tenant has committed, with probabilities
@@ -38,7 +39,7 @@ pub const HELP: &str = "\
 Up and down arrows walk the history.";
 
 const IMPORT_USAGE: &str = "usage: \\import fact <sentence> | \\import blob <file>";
-const TENANT_USAGE: &str = "usage: \\t create <name> | \\t checkout <name> | \\t get | \\t delete <name> | \\t export <file> | \\t import <file> | \\t users";
+const TENANT_USAGE: &str = "usage: \\t create <name> | \\t checkout <name> | \\t get | \\t delete <name> | \\t export <file> | \\t import <file> | \\t users | \\t meta [name]";
 const USER_USAGE: &str =
     "usage: \\u me | \\u add <user> | \\u grant <user> <tenant> | \\u remove <user> <tenant>";
 
@@ -183,6 +184,14 @@ impl Cli {
                 let request = pb::TenantName { name: name.clone() };
                 let list = self.call(self.rt.block_on(client.tenant_users(request)))?;
                 Ok(render::tenant_users(&name, &list))
+            }
+            "meta" => {
+                let name = match arg.is_empty() {
+                    true => self.tenant()?,
+                    false => arg.to_string(),
+                };
+                let meta = self.call(self.rt.block_on(client.tenant_meta(named(&name)?)))?;
+                Ok(render::meta(&meta))
             }
             "delete" => {
                 let t = self.call(self.rt.block_on(client.delete_tenant(named(arg)?)))?;

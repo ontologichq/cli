@@ -46,7 +46,7 @@ pub const COMMANDS: &[&str] = &[
     "\\q",
 ];
 pub const TENANT_SUBCOMMANDS: &[&str] = &[
-    "create", "checkout", "get", "delete", "import", "export", "users",
+    "create", "checkout", "get", "delete", "import", "export", "users", "meta",
 ];
 pub const USER_SUBCOMMANDS: &[&str] = &["me", "add", "grant", "remove"];
 pub const IMPORT_SUBCOMMANDS: &[&str] = &["fact", "blob"];
