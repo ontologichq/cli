@@ -167,8 +167,14 @@ pub fn cost(cost: &pb::Cost) -> String {
     let mut parts = vec![
         count(cost.calls, "call", "calls"),
         format!(
-            "{} in + {} out ({} reasoning)",
-            cost.input_tokens, cost.output_tokens, cost.reasoning_tokens
+            "{} in{} + {} out ({} reasoning)",
+            cost.input_tokens,
+            match cost.cached_tokens {
+                0 => String::new(),
+                n => format!(" ({n} cached)"),
+            },
+            cost.output_tokens,
+            cost.reasoning_tokens
         ),
         format!("{:.1} s", cost.seconds),
     ];
