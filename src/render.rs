@@ -289,6 +289,29 @@ pub fn version(host: &str, health: &pb::HealthReply, cli: &str) -> String {
 }
 
 /// The people an email's headers name, linked before any model call.
+/// `worksAt  the subject works for the object (employee -> employer; inverse employs; one at a
+/// time)`; only the name for a type from before meanings were stored.
+fn relation_type(t: &pb::RelationType) -> String {
+    let mut about = Vec::new();
+    if !t.subject_role.is_empty() || !t.object_role.is_empty() {
+        about.push(format!("{} -> {}", t.subject_role, t.object_role));
+    }
+    if !t.inverse.is_empty() {
+        about.push(format!("inverse {}", t.inverse));
+    }
+    if t.single_valued {
+        about.push("one at a time".to_string());
+    }
+    let mut line = magenta(&t.name);
+    if !t.definition.is_empty() {
+        line.push_str(&format!("  {}", t.definition));
+    }
+    if !about.is_empty() {
+        line.push_str(&dim(&format!(" ({})", about.join("; "))));
+    }
+    line
+}
+
 pub fn people(e: &pb::People) -> String {
     let mut lines: Vec<String> = e
         .new_entities
@@ -320,8 +343,12 @@ pub fn people(e: &pb::People) -> String {
     if lines.is_empty() {
         lines.push(dim("no names in the headers"));
     }
-    let head = row("people", &lines);
-    format!("{head}\n{}", row("messages", &[e.messages.to_string()]))
+    let mut out = vec![row("people", &lines)];
+    for t in &e.new_types {
+        out.push(row("type", &[relation_type(t)]));
+    }
+    out.push(row("messages", &[e.messages.to_string()]));
+    out.join("\n")
 }
 
 pub fn code_pass(e: &pb::CodePass) -> String {
@@ -432,6 +459,9 @@ pub fn linked_event(e: &pb::Linked) -> String {
             )],
         ));
     }
+    for t in &e.new_types {
+        out.push(row("type", &[relation_type(t)]));
+    }
     for r in &e.new_relations {
         out.push(row("new", &[relation(r)]));
     }
@@ -476,6 +506,11 @@ pub fn reasked(e: &pb::Reasked) -> String {
         e.relations
             .iter()
             .map(|d| format!("{id} {}", decision(d, false))),
+    );
+    lines.extend(
+        e.new_types
+            .iter()
+            .map(|t| format!("{id} type {}", relation_type(t))),
     );
     lines.extend(
         e.new_relations
@@ -816,16 +851,11 @@ pub fn overview(o: &pb::Overview, session: &pb::Cost) -> String {
             .collect(),
     };
     out.push(row("entities", &entities));
-    let types = match o.types.is_empty() {
-        true => dim("none"),
-        false => o
-            .types
-            .iter()
-            .map(|t| magenta(t))
-            .collect::<Vec<_>>()
-            .join(", "),
+    let types: Vec<String> = match o.relation_types.is_empty() {
+        true => vec![dim("none")],
+        false => o.relation_types.iter().map(relation_type).collect(),
     };
-    out.push(row("types", &[types]));
+    out.push(row("types", &types));
     if let Some(c) = &s.cost {
         out.push(row("cost", &[format!("{} {}", dim("tenant"), cost(c))]));
     }
