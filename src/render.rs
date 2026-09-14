@@ -354,7 +354,13 @@ pub fn people(e: &pb::People) -> String {
     for t in &e.new_types {
         out.push(row("type", &[relation_type(t)]));
     }
-    out.push(row("messages", &[e.messages.to_string()]));
+    let mut messages = vec![e.messages.to_string()];
+    messages.extend(
+        e.new_messages
+            .iter()
+            .map(|m| format!("{} {}", entity_ref(&m.id, &m.name), green("new"))),
+    );
+    out.push(row("messages", &messages));
     out.join("\n")
 }
 
