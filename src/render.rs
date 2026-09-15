@@ -498,7 +498,10 @@ pub fn linked_event(e: &pb::Linked) -> String {
             &[format!(
                 "{} {}",
                 entity_ref(&entity.id, &entity.name),
-                dim(&format!("({}: {})", entity.kind, entity.description))
+                dim(&match entity.description.is_empty() {
+                    true => format!("({})", entity.kind),
+                    false => format!("({}: {})", entity.kind, entity.description),
+                })
             )],
         ));
     }
