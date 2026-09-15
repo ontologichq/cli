@@ -118,8 +118,12 @@ fn relation(r: &pb::Relation) -> String {
         true => dim(" (new relation type)"),
         false => String::new(),
     };
+    let condition = match r.condition.is_empty() {
+        true => String::new(),
+        false => format!(" {}", yellow(&format!("(if {})", r.condition))),
+    };
     format!(
-        "{} {} {} {} {}{fresh}",
+        "{} {} {} {}{condition} {}{fresh}",
         dim(&r.id),
         bold(&r.subject_name),
         magenta(&r.predicate),
