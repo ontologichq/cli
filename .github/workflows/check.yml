@@ -1,0 +1,20 @@
+name: check
+
+# CI needs kit's v0.1.0 git tag: Cargo.toml still names a sibling checkout (../kit), which a
+# runner does not have, and that path dependency becomes the tag before the first push.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: make check
