@@ -171,6 +171,39 @@ fn dollars(dollars: f64) -> String {
     }
 }
 
+/// "340 ms" under a second, else "1.2 s".
+fn duration(ms: u64) -> String {
+    match ms {
+        0..1_000 => format!("{ms} ms"),
+        _ => format!("{:.1} s", ms as f64 / 1000.0),
+    }
+}
+
+/// `tagger 1.2 s · model 6.4 s · code 3 ms · total 7.8 s`: the stages that took time, in a fixed
+/// order, then the total when it is known. `each` divides every field (an average).
+pub fn timing(t: &pb::Timing, each: u64) -> String {
+    let each = each.max(1);
+    let stages = [
+        ("tagger", t.tagger_ms),
+        ("context", t.context_ms),
+        ("model", t.model_ms),
+        ("code", t.code_ms),
+        ("relink", t.relink_ms),
+        ("reask", t.reask_ms),
+        ("save", t.save_ms),
+        ("total", t.total_ms),
+    ];
+    let shown: Vec<String> = stages
+        .iter()
+        .filter(|(_, ms)| *ms > 0)
+        .map(|(name, ms)| format!("{name} {}", duration(ms / each)))
+        .collect();
+    match shown.is_empty() {
+        true => dim("under a millisecond"),
+        false => dim(&shown.join(" · ")),
+    }
+}
+
 /// `41.2 KB`.
 fn bytes(n: u64) -> String {
     match n {
@@ -452,6 +485,9 @@ pub fn linked_event(e: &pb::Linked) -> String {
             out.push(row("tagger", &[checklist(p)]));
         }
     }
+    if let Some(t) = &e.timing {
+        out.push(row("time", &[timing(t, 1)]));
+    }
     for entity in &e.new_entities {
         out.push(row(
             "new",
@@ -551,6 +587,9 @@ pub fn finished(e: &pb::Finished) -> String {
     }
     if let Some(c) = &e.cost {
         out.push(row("cost", &[cost(c)]));
+    }
+    if let Some(t) = &e.timing {
+        out.push(row("time", &[timing(t, 1)]));
     }
     out.join("\n")
 }
@@ -792,6 +831,18 @@ pub fn meta(m: &pb::Meta) -> String {
         "asks",
         &average(m.questions, "question", "questions", m.question_cost),
     ));
+    let mut averages = Vec::new();
+    for (n, what, t) in [
+        (m.imports, "import", &m.import_timing),
+        (m.questions, "question", &m.question_timing),
+    ] {
+        if let Some(t) = t.as_ref().filter(|_| n > 0) {
+            averages.push(format!("{} {}", dim(&format!("per {what}")), timing(t, n)));
+        }
+    }
+    if !averages.is_empty() {
+        out.push(row("time", &averages));
+    }
     if let Some(run) = &m.run {
         out.push(row(
             "run",
