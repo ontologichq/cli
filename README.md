@@ -79,4 +79,12 @@ make check   # formatting, clippy with warnings as errors, tests
 make run P=<key> HOST=localhost:6969 U=admin
 ```
 
+To change kit and the CLI together, point Cargo at a local kit checkout in a gitignored
+`.cargo/config.toml`:
+
+```toml
+[patch."https://github.com/ontologichq/kit"]
+ontologic-kit = { path = "../kit" }
+```
+
 Licensed under the Apache License, Version 2.0.

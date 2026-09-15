@@ -30,9 +30,10 @@ messages. Tests and docs use invented names (Maya Chen, Priya Raman, Tomas, Acme
   which `\v` prints. Setting it in the environment names the commit of a copy without `.git`.
 
 The API (`ontologic_kit::pb`), the client (`connect`, `SignIn`, `describe`, `TRUST_DIR`) and the
-fake engine come from [kit](https://github.com/ontologichq/kit). Kit is a path dependency on a
-sibling checkout (`../kit`) until its `v0.1.0` tag is published; then Cargo.toml depends on the
-tag and CI can build. Code a second repository needs moves into kit.
+fake engine come from [kit](https://github.com/ontologichq/kit), pinned by tag in Cargo.toml. To
+change kit and the CLI together, patch it to a sibling checkout in a gitignored
+`.cargo/config.toml` (`[patch."https://github.com/ontologichq/kit"] ontologic-kit = { path =
+"../kit" }`), and bump the tag once kit is released. Code a second repository needs moves into kit.
 
 ## Tests
 

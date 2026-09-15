@@ -12,14 +12,13 @@ name = "ontologic"
 path = "src/main.rs"
 
 [dependencies]
-# A path to a sibling checkout until kit's v0.1.0 tag is on GitHub; before the first push this
-# becomes { git = "https://github.com/ontologichq/kit", tag = "v0.1.0", features = ["client"] }.
-ontologic-kit = { path = "../kit", features = ["client"] }
+# Pinned by tag. To work on kit alongside, patch it to a local checkout in a gitignored
+# .cargo/config.toml (see README).
+ontologic-kit = { git = "https://github.com/ontologichq/kit", tag = "v0.1.0", features = ["client"] }
 rustyline = { version = "18", features = ["buffer-redux", "derive"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 tonic = { version = "0.14", features = ["tls-ring", "tls-webpki-roots"] }
 
 [dev-dependencies]
-# The same kit with its fake engine, which tests/cli.rs runs the binary against. It becomes the
-# v0.1.0 git tag together with the dependency above.
-ontologic-kit = { path = "../kit", features = ["fake"] }
+# The same kit with its fake engine, which tests/cli.rs runs the binary against.
+ontologic-kit = { git = "https://github.com/ontologichq/kit", tag = "v0.1.0", features = ["fake"] }

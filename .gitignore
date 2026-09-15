@@ -1,3 +1,5 @@
 /target
 .ontologic_history
 .ontologic/
+# A local patch of kit to a sibling checkout.
+/.cargo/
