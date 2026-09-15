@@ -1,0 +1,19 @@
+[package]
+name = "ontologic"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "ontologic"
+path = "src/main.rs"
+
+[dependencies]
+brain-proto = { path = "../proto" }
+rustyline = { version = "18", features = ["buffer-redux", "derive"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tonic = { version = "0.14", features = ["tls-ring", "tls-webpki-roots"] }
+
+[dev-dependencies]
+brain-engine = { path = "../engine" }
+serde_json = "1"
