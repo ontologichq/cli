@@ -1,9 +1,8 @@
-//! `ontologic`: the command line for a brain engine. It signs in, then every command calls
+//! `ontologic`: the command line for an ontologic engine. It signs in, then every command calls
 //! the engine over gRPC with TLS and renders what comes back; imports and questions print
 //! stage by stage.
 
 mod commands;
-mod connect;
 mod input;
 mod paint;
 mod render;
@@ -11,9 +10,8 @@ mod render;
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::PathBuf;
 
-use brain_proto as pb;
 use commands::{Cli, say};
-use connect::DEFAULT_PORT;
+use ontologic_kit::{DEFAULT_PORT, client, pb};
 
 const HISTORY: &str = ".ontologic_history";
 
@@ -23,8 +21,8 @@ usage: ontologic -h <host:port> -u <user> -p <key> [--ca <pem>] [--no-color] [--
   -h, --host   the engine (default localhost:6969); https://, or http:// for an engine run with --no-tls
   -u, --user   your user name (or set ONTOLOGIC_USER)
   -p, --key    your key (or set ONTOLOGIC_KEY, which keeps it out of your shell history)
-  --ca         trust this certificate (default: .brain/tls/engine.pem for localhost,
-               .brain/tls/<host>.pem for other hosts, when the file exists)
+  --ca         trust this certificate (default: .ontologic/tls/engine.pem for localhost,
+               .ontologic/tls/<host>.pem for other hosts, when the file exists)
   --no-color   plain output";
 
 struct Args {
@@ -127,7 +125,7 @@ fn main() {
         .expect("start the runtime");
     let connected = {
         let _guard = rt.enter();
-        connect::connect(&args.host, args.ca.as_deref(), &args.user, &args.key)
+        client::connect(&args.host, args.ca.as_deref(), &args.user, &args.key)
     };
     let (client, host) = match connected {
         Ok(connected) => connected,

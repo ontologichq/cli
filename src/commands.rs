@@ -6,11 +6,11 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::rc::Rc;
 
-use brain_proto as pb;
+use ontologic_kit::client::{Client, describe};
+use ontologic_kit::pb;
 use tokio::runtime::Runtime;
 use tonic::{Code, Status};
 
-use crate::connect::{Client, describe};
 use crate::input::{self, Command};
 use crate::{paint, render};
 
@@ -190,7 +190,11 @@ impl Cli {
     fn version(&self) -> Result<String, String> {
         let mut client = self.client.clone();
         let health = self.call(self.rt.block_on(client.health(pb::Empty {})))?;
-        Ok(render::version(&self.host, &health, env!("BRAIN_VERSION")))
+        Ok(render::version(
+            &self.host,
+            &health,
+            env!("ONTOLOGIC_VERSION"),
+        ))
     }
 
     fn tenant_command(&mut self, sub: &str, arg: &str) -> Result<String, String> {

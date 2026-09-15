@@ -1,7 +1,7 @@
 //! How the engine's answers look in a terminal: a header rule per command, a label column,
 //! and colors that carry meaning (green sure, yellow weighed, red rejected or unplaced).
 
-use brain_proto as pb;
+use ontologic_kit::pb;
 
 use crate::paint::{
     band, blue, bold, bold_blue, bold_green, cyan, dim, green, magenta, percent, percents_in, red,
@@ -67,7 +67,7 @@ fn guess_list(guesses: &[pb::Guess]) -> String {
     }
 }
 
-/// The sentence with each link shown by how sure the brain is.
+/// The sentence with each link shown by how sure the engine is.
 pub fn linked(segments: &[pb::Segment]) -> String {
     segments
         .iter()
@@ -332,7 +332,6 @@ pub fn version(host: &str, health: &pb::HealthReply, cli: &str) -> String {
     .join("\n")
 }
 
-/// The people an email's headers name, linked before any model call.
 /// `worksAt  the subject works for the object (employee -> employer; inverse employs; one at a
 /// time)`; only the name for a type from before meanings were stored.
 fn relation_type(t: &pb::RelationType) -> String {
@@ -356,6 +355,7 @@ fn relation_type(t: &pb::RelationType) -> String {
     line
 }
 
+/// The people an email's headers name, linked before any model call.
 pub fn people(e: &pb::People) -> String {
     let mut lines: Vec<String> = e
         .new_entities
