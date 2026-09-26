@@ -122,14 +122,27 @@ fn relation(r: &pb::Relation) -> String {
         true => String::new(),
         false => format!(" {}", yellow(&format!("(if {})", r.condition))),
     };
+    let rung = match r.rung.is_empty() {
+        true => String::new(),
+        false => format!(" {}", dim(&r.rung)),
+    };
     format!(
-        "{} {} {} {}{condition} {}{fresh}",
+        "{} {} {} {}{condition} {}{rung}{fresh}",
         dim(&r.id),
         bold(&r.subject_name),
         magenta(&r.predicate),
         object(r),
         percent(r.confidence)
     )
+}
+
+/// `90% accepted`: how sure a fact is and what it may be used for; an engine that does not rank
+/// its facts says only how sure.
+fn sure(r: &pb::Relation) -> String {
+    match r.rung.is_empty() {
+        true => percent_plain(r.confidence),
+        false => format!("{} {}", percent_plain(r.confidence), r.rung),
+    }
 }
 
 /// `s5 90% "Tomas still lives in Toronto"`, the words cut to 60 characters.
@@ -159,7 +172,7 @@ fn more_evidence(m: &pb::MoreEvidence) -> String {
         object(r),
         dim("+"),
         evidence_line(e),
-        dim(&format!("(fact now {})", percent_plain(r.confidence)))
+        dim(&format!("(fact now {})", sure(r)))
     )
 }
 
@@ -691,6 +704,9 @@ pub fn ask_answer(e: &pb::AskAnswer, facts: bool) -> String {
         ))),
     }
     let mut out = vec![row("answer", &lines)];
+    if let Some(count) = &e.count {
+        out.push(row("computed", &[computed(count)]));
+    }
     if !e.notes.is_empty() {
         let notes: Vec<String> = e.notes.iter().map(|n| yellow(n)).collect();
         out.push(row("check", &notes));
@@ -714,6 +730,24 @@ pub fn ask_answer(e: &pb::AskAnswer, facts: bool) -> String {
         (false, true) => {}
     }
     out.join("\n")
+}
+
+/// `count 3 to 4 (bounded)`: a number the engine computed, from its floor to its ceiling (`at
+/// least` when nothing bounds it), and how far it can be claimed.
+fn computed(c: &pb::CountRange) -> String {
+    let range = match c.upper {
+        Some(upper) if upper == c.lower => upper.to_string(),
+        Some(upper) => format!("{} to {upper}", c.lower),
+        None => format!("at least {}", c.lower),
+    };
+    let mut parts = vec![bold(&range)];
+    if !c.operation.is_empty() {
+        parts.insert(0, c.operation.clone());
+    }
+    if !c.status.is_empty() {
+        parts.push(dim(&format!("({})", c.status)));
+    }
+    parts.join(" ")
 }
 
 // ---------------------------------------------------------------------------------------

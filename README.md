@@ -69,6 +69,11 @@ members use the tenants an admin granted them.
 
 File names in commands are relative to the directory the CLI runs from.
 
+A fact shows how sure the engine is of it and, from an engine that ranks its facts, its rung: what
+it may be used for (`proposed`, `supported`, `accepted`, `computable` or `identity-trusted`). An
+answer that is a number the engine computed shows its floor and its ceiling, and how far it can be
+claimed.
+
 ## Develop
 
 The engine's API and the client come from [kit](https://github.com/ontologichq/kit). The tests

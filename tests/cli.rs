@@ -653,6 +653,7 @@ fn an_import_prints_each_stage_as_the_engine_sends_it() {
                     pb::Relation {
                         object_kind: "percent".into(),
                         condition: "fully diluted".into(),
+                        rung: "supported".into(),
                         ..fact("r2", "Maya Chen", "holdsShare", "", "40%", 0.85)
                     },
                 ],
@@ -683,7 +684,10 @@ fn an_import_prints_each_stage_as_the_engine_sends_it() {
                     error: String::new(),
                 }),
                 more_evidence: vec![pb::MoreEvidence {
-                    relation: Some(fact("r3", "Maya Chen", "livesIn", "e4", "Toronto", 0.8)),
+                    relation: Some(pb::Relation {
+                        rung: "supported".into(),
+                        ..fact("r3", "Maya Chen", "livesIn", "e4", "Toronto", 0.8)
+                    }),
                     evidence: Some(pb::Evidence {
                         source_id: "s3".into(),
                         start: 0,
@@ -786,9 +790,9 @@ fn an_import_prints_each_stage_as_the_engine_sends_it() {
          \x20type     worksAt  the subject works for the object \
          (employee -> employer; inverse employs; one at a time)\n\
          \x20new      r1 Maya Chen worksAt Lumenworks 90% (new relation type)\n\
-         \x20new      r2 Maya Chen holdsShare \"40%\" percent (if fully diluted) 85%\n\
+         \x20new      r2 Maya Chen holdsShare \"40%\" percent (if fully diluted) 85% supported\n\
          \x20more     r3 Maya Chen livesIn Toronto + s3 80% \
-         \"Maya Chen joined Lumenworks in Toronto with Tomas.\" (fact now 80%)\n\
+         \"Maya Chen joined Lumenworks in Toronto with Tomas.\" (fact now 80% supported)\n\
          \x20linked   :e1(Maya Chen) joined [Lumenworks? e2 70%, e3 30%] in :e4(Toronto) \
          with [Tomas?].\n\
          \x20relink   s1 \"Maya\" → e1 Maya Chen 100%\n\
@@ -1354,6 +1358,7 @@ fn show_prints_the_tenant_an_entity_and_a_source() {
                             confidence: 0.6,
                         },
                     ],
+                    rung: "accepted".into(),
                     ..fact("r1", "Maya Chen", "worksAt", "e2", "Lumenworks", 0.9)
                 }],
                 mentions: vec![pb::Mention {
@@ -1428,7 +1433,7 @@ fn show_prints_the_tenant_an_entity_and_a_source() {
         "\n names    Maya Chen, Maya\n\
          \x20kind     person\n\
          \x20about    founder of Lumenworks\n\
-         \x20rel      r1 Maya Chen worksAt Lumenworks 90%\n\
+         \x20rel      r1 Maya Chen worksAt Lumenworks 90% accepted\n\
          \x20           s1 90% \"Maya Chen works at Lumenworks.\"\n\
          \x20           s2 60% \"Maya Chen, Priya Raman and Tomas moved the Lumenworks office…\"\n\
          \x20mentions s1 \"Maya Chen\" 0..9 → e1 Maya Chen 100% (by code) \
@@ -1722,4 +1727,55 @@ fn turtle_files_are_written_to_and_read_from_the_cli_directory() {
         summary: None,
     };
     assert_eq!(loaded, [sent.clone(), sent.clone(), sent]);
+}
+
+#[test]
+fn a_computed_count_shows_its_floor_and_its_ceiling() {
+    let engine = engine();
+    engine.reply(Rpc::CreateTenant, tenant("acme", 0, 0, 0));
+    let counted = |answer: &str, operation: &str, lower, upper, status: &str| {
+        vec![ask_event(Ask::Answer(pb::AskAnswer {
+            options: vec![pb::AnswerOption {
+                answer: answer.into(),
+                probability: 0.9,
+                ..Default::default()
+            }],
+            something_else: 0.1,
+            exclusive: true,
+            count: Some(pb::CountRange {
+                operation: operation.into(),
+                lower,
+                upper,
+                status: status.into(),
+            }),
+            ..Default::default()
+        }))]
+    };
+    engine.stream(
+        Rpc::Ask,
+        counted("3 or 4 postmortems", "count", 3, Some(4), "bounded"),
+    );
+    engine.stream(
+        Rpc::Ask,
+        counted("8 customers", "distinct customer", 8, Some(8), "exact"),
+    );
+    engine.stream(
+        Rpc::Ask,
+        counted("at least 5", "count", 5, None, "over the records held"),
+    );
+    let dir = workdir("count");
+    let out = ontologic(
+        &engine,
+        &dir,
+        "\\t create acme\n\\ask how many postmortems in May\n\\ask how many customers\n\
+         \\ask how many tickets\n",
+    );
+    assert_has(
+        &out,
+        "acme>  answer   3 or 4 postmortems 90%  no evidence named\n\
+         \x20         something else 10%\n\
+         \x20computed count 3 to 4 (bounded)\nacme> ",
+    );
+    assert_has(&out, " computed distinct customer 8 (exact)\n");
+    assert_has(&out, " computed count at least 5 (over the records held)\n");
 }
