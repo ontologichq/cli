@@ -34,6 +34,7 @@ fn user(name: &str, role: &str, tenants: &[&str]) -> pb::User {
         name: name.into(),
         role: role.into(),
         tenants: tenants.iter().map(|t| t.to_string()).collect(),
+        principals: Vec::new(),
     }
 }
 
@@ -808,7 +809,8 @@ fn an_import_prints_each_stage_as_the_engine_sends_it() {
         imported,
         [pb::ImportRequest {
             tenant: "acme".into(),
-            text: text.into()
+            text: text.into(),
+            key: String::new()
         }]
     );
 }
@@ -966,7 +968,8 @@ fn a_blob_is_sent_by_its_file_name_and_prints_its_people_and_parts() {
         [pb::BlobRequest {
             tenant: "acme".into(),
             name: "launch.eml".into(),
-            content: content.as_bytes().to_vec()
+            content: content.as_bytes().to_vec(),
+            key: String::new()
         }]
     );
 }
@@ -1011,6 +1014,7 @@ fn a_question_prints_what_it_found_its_options_and_what_they_rest_on() {
                 something_else: 0.05,
                 notes: vec!["dropped r9, which is not in the context".into()],
                 exclusive: true,
+                count: None,
             })),
             ask_event(Ask::Finished(pb::Finished {
                 cost: Some(pb::Cost {

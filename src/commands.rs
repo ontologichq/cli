@@ -322,9 +322,11 @@ impl Cli {
     fn import_fact(&mut self, text: &str) -> Result<(), String> {
         let tenant = self.tenant()?;
         let mut client = self.client.clone();
+        // No key: every import from the CLI is a document of its own.
         let request = pb::ImportRequest {
             tenant,
             text: text.to_string(),
+            key: String::new(),
         };
         let stream = self.call(self.rt.block_on(client.import(request)))?;
         self.follow_import(stream)
@@ -342,6 +344,7 @@ impl Cli {
             tenant,
             name,
             content,
+            key: String::new(),
         };
         let stream = self
             .call(self.rt.block_on(client.import_blob(request)))
