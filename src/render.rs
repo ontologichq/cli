@@ -1052,6 +1052,136 @@ pub fn source_view(v: &pb::SourceView) -> String {
 }
 
 // ---------------------------------------------------------------------------------------
+// Documents out and back, migrations and who reads what
+
+/// `retracted d3: 5 entities · 3 sources · 4 relations → 3 entities · 2 sources · 2 relations`.
+pub fn lifecycle(done: &str, reply: &pb::LifecycleReply) -> String {
+    let counts = |c: Option<pb::Counts>| {
+        let c = c.unwrap_or_default();
+        format!(
+            "{} · {} · {}",
+            count(c.entities.into(), "entity", "entities"),
+            count(c.sources.into(), "source", "sources"),
+            count(c.relations.into(), "relation", "relations")
+        )
+    };
+    format!(
+        "{done} {}: {} → {}",
+        reply.documents.join(", "),
+        counts(reply.before),
+        counts(reply.after)
+    )
+}
+
+/// What `\\erase` asks before anything is destroyed.
+pub fn erase_question(request: &pb::DocumentsRequest) -> String {
+    let what = format!(
+        "erasing destroys {} for good; only a tombstone with each version's hash stays",
+        request.documents.join(", ")
+    );
+    format!(
+        "{}\ntype the tenant's name, {}, to erase; anything else cancels",
+        warning(&what),
+        bold(&request.tenant)
+    )
+}
+
+/// `\\migrate`: what reading the tenant under the pinned schema versions changes, staged or
+/// committed.
+pub fn migration(request: &pb::MigrateRequest, reply: &pb::MigrateReply) -> String {
+    let d = reply.diff.clone().unwrap_or_default();
+    let pins: Vec<String> = request
+        .pins
+        .iter()
+        .map(|p| format!("{}:{}", p.kind, p.version))
+        .collect();
+    let mut out = vec![
+        header(&format!("migrate {}", request.tenant)),
+        row("pins", &[pins.join(" · ")]),
+        row(
+            "facts",
+            &[format!(
+                "{} added · {} removed · {} promoted · {} demoted · {} support changed · {} \
+                 unchanged",
+                d.facts_added,
+                d.facts_removed,
+                d.promoted,
+                d.demoted,
+                d.support_changed,
+                d.facts_unchanged
+            )],
+        ),
+        row(
+            "entities",
+            &[format!(
+                "{} added · {} removed · {} renamed · {} identity changed",
+                d.entities_added, d.entities_removed, d.entities_renamed, d.identity_changed
+            )],
+        ),
+    ];
+    let types: Vec<String> = d
+        .by_type
+        .iter()
+        .map(|t| {
+            let changes: Vec<String> = [
+                (t.added, "added"),
+                (t.removed, "removed"),
+                (t.promoted, "promoted"),
+                (t.demoted, "demoted"),
+            ]
+            .iter()
+            .filter(|(n, _)| *n > 0)
+            .map(|(n, what)| format!("{n} {what}"))
+            .collect();
+            format!("{} {}", magenta(&t.relation_type), changes.join(" · "))
+        })
+        .collect();
+    if !types.is_empty() {
+        out.push(row("types", &types));
+    }
+    out.push(row(
+        "calls",
+        &[count(d.model_calls.into(), "model call", "model calls")],
+    ));
+    out.push(row(
+        "state",
+        &[match reply.committed {
+            true => green("committed"),
+            false => yellow("staged, nothing written"),
+        }],
+    ));
+    out.join("\n")
+}
+
+/// `\\acl`: who reads a document now.
+pub fn acl(doc: &str, principals: &[&str]) -> String {
+    format!(
+        "{} is read by {} from now on, and by every admin",
+        blue(doc),
+        principals.join(", ")
+    )
+}
+
+/// `\\principals`: what a member reads a tenant's documents as, themselves first.
+pub fn principals(user: &pb::User, tenant: &str) -> String {
+    let groups = user
+        .principals
+        .iter()
+        .find(|p| p.tenant == tenant)
+        .map(|p| p.groups.clone())
+        .unwrap_or_default();
+    let every: Vec<String> = std::iter::once(format!("user:{}", user.name))
+        .chain(groups)
+        .collect();
+    format!(
+        "{} reads {} as {}",
+        bold(&user.name),
+        blue(tenant),
+        every.join(", ")
+    )
+}
+
+// ---------------------------------------------------------------------------------------
 // Users
 
 fn role(role: &str) -> String {

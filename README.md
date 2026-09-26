@@ -58,6 +58,11 @@ members use the tenants an admin granted them.
 | `\import fact <text>` | add a fact: link things, find relations, re-link older sources |
 | `\import blob <file>` | add a file: an email (`.eml`) or text, part by part |
 | `\commit`, `\rollback` | make the staged imports part of the tenant, or drop them |
+| `\retract <doc...> [reason]`, `\restore <doc...>` | take documents (`d3`) out of every answer, count and link, or put them back |
+| `\erase <doc...> [reason]` | admins: destroy documents for good, once you type the tenant's name to confirm |
+| `\migrate <kind:version ...> [reason]` | admins: show what reading the tenant under other schema versions changes, then commit it when you type `yes` |
+| `\acl <doc> <principal...>` | admins: who may read a document (`user:<name>` or a group) |
+| `\principals <user> <group...>` | admins: the groups a member reads the current tenant's documents as |
 | `\ask <question>` | answer from what the tenant has committed, with probabilities |
 | `\ask --staged <q>`, `\ask --facts <q>` | include the imports not committed yet; answer from facts alone |
 | `\s`, `\s <id>` | what the tenant knows and what it cost; everything about an entity (`e1`) or a source (`s1`) |

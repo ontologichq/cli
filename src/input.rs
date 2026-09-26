@@ -23,6 +23,14 @@ pub enum Command<'a> {
     Show(&'a str),
     Commit,
     Rollback,
+    /// `\retract`, `\restore` or `\erase`, named without the backslash, and its documents
+    Documents(&'a str, Documents<'a>),
+    /// `\migrate <kind:version ...> [reason]`
+    Migrate(Migration<'a>),
+    /// `\acl <doc> <principal...>`
+    Acl(&'a str, Vec<&'a str>),
+    /// `\principals <user> <group...>`
+    Principals(&'a str, Vec<&'a str>),
     Version,
     Help,
     Quit,
@@ -37,6 +45,20 @@ pub struct Question<'a> {
     pub facts: bool,
 }
 
+/// Documents by id (`d3`), and why.
+#[derive(Debug, PartialEq)]
+pub struct Documents<'a> {
+    pub ids: Vec<&'a str>,
+    pub reason: &'a str,
+}
+
+/// Schema versions to read the tenant under (`ticket:12`), and why.
+#[derive(Debug, PartialEq)]
+pub struct Migration<'a> {
+    pub pins: Vec<(&'a str, u32)>,
+    pub reason: &'a str,
+}
+
 pub const COMMANDS: &[&str] = &[
     "\\t",
     "\\u",
@@ -45,6 +67,12 @@ pub const COMMANDS: &[&str] = &[
     "\\s",
     "\\commit",
     "\\rollback",
+    "\\retract",
+    "\\restore",
+    "\\erase",
+    "\\migrate",
+    "\\acl",
+    "\\principals",
     "\\v",
     "\\h",
     "\\q",
@@ -88,6 +116,44 @@ fn question(mut rest: &str) -> Question<'_> {
     }
 }
 
+/// `d3 d4 an old copy`: the document ids in front, then why.
+fn documents(mut rest: &str) -> Documents<'_> {
+    let mut ids = Vec::new();
+    loop {
+        let (word, tail) = split_word(rest);
+        let digits = word.strip_prefix('d').unwrap_or_default();
+        if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+            break;
+        }
+        ids.push(word);
+        rest = tail;
+    }
+    Documents {
+        ids,
+        reason: unquote(rest),
+    }
+}
+
+/// `ticket:12 postmortem:5 new rules`: the `kind:version` pins in front, then why.
+fn migration(mut rest: &str) -> Migration<'_> {
+    let mut pins = Vec::new();
+    loop {
+        let (word, tail) = split_word(rest);
+        let Some((kind, Ok(version))) = word.rsplit_once(':').map(|(k, v)| (k, v.parse())) else {
+            break;
+        };
+        if kind.is_empty() {
+            break;
+        }
+        pins.push((kind, version));
+        rest = tail;
+    }
+    Migration {
+        pins,
+        reason: unquote(rest),
+    }
+}
+
 /// A line is `\command` plus optional text; the text is the rest of the line, trimmed.
 pub fn parse(line: &str) -> Option<Command<'_>> {
     let line = line.trim();
@@ -112,6 +178,16 @@ pub fn parse(line: &str) -> Option<Command<'_>> {
         "\\s" => Command::Show(rest),
         "\\commit" => Command::Commit,
         "\\rollback" => Command::Rollback,
+        "\\retract" | "\\restore" | "\\erase" => Command::Documents(&command[1..], documents(rest)),
+        "\\migrate" => Command::Migrate(migration(rest)),
+        "\\acl" => {
+            let (doc, principals) = split_word(rest);
+            Command::Acl(doc, principals.split_whitespace().collect())
+        }
+        "\\principals" => {
+            let (user, groups) = split_word(rest);
+            Command::Principals(user, groups.split_whitespace().collect())
+        }
         "\\v" => Command::Version,
         "\\h" => Command::Help,
         "\\q" => Command::Quit,
@@ -171,7 +247,8 @@ pub fn highlight_line(line: &str) -> String {
                 out.push_str(&ansi(TEXT, text));
             }
         }
-        "\\ask" | "\\s" => out.push_str(&ansi(TEXT, body)),
+        "\\ask" | "\\s" | "\\retract" | "\\restore" | "\\erase" | "\\migrate" | "\\acl"
+        | "\\principals" => out.push_str(&ansi(TEXT, body)),
         _ => out.push_str(body),
     }
     out
@@ -336,6 +413,7 @@ mod tests {
         );
         assert_eq!(words("\\u g"), ["grant "]);
         assert_eq!(words("\\import "), ["fact ", "blob "]);
+        assert_eq!(words("\\re"), ["\\retract ", "\\restore "]);
         assert!(words("\\q ").is_empty());
     }
 
@@ -449,6 +527,71 @@ mod tests {
     }
 
     #[test]
+    fn parses_documents_pins_and_principals() {
+        let documents = |line| match parse(line) {
+            Some(Command::Documents(verb, documents)) => Some((verb, documents)),
+            _ => None,
+        };
+        assert_eq!(
+            documents("\\retract d3 d12 \"an old copy\""),
+            Some((
+                "retract",
+                Documents {
+                    ids: vec!["d3", "d12"],
+                    reason: "an old copy"
+                }
+            ))
+        );
+        assert_eq!(
+            documents("\\erase d3"),
+            Some((
+                "erase",
+                Documents {
+                    ids: vec!["d3"],
+                    reason: ""
+                }
+            ))
+        );
+        assert_eq!(
+            documents("\\restore duplicate d3"),
+            Some((
+                "restore",
+                Documents {
+                    ids: Vec::new(),
+                    reason: "duplicate d3"
+                }
+            )),
+            "the documents come first"
+        );
+        let migration = |line| match parse(line) {
+            Some(Command::Migrate(migration)) => Some(migration),
+            _ => None,
+        };
+        assert_eq!(
+            migration("\\migrate ticket:13 registry-system:2 rules: new"),
+            Some(Migration {
+                pins: vec![("ticket", 13), ("registry-system", 2)],
+                reason: "rules: new"
+            })
+        );
+        assert_eq!(
+            migration("\\migrate ticket :4 x:y"),
+            Some(Migration {
+                pins: Vec::new(),
+                reason: "ticket :4 x:y"
+            })
+        );
+        assert!(matches!(
+            parse("\\acl d2  group:hr user:maya "),
+            Some(Command::Acl("d2", principals)) if principals == ["group:hr", "user:maya"]
+        ));
+        assert!(matches!(
+            parse("\\principals tomas"),
+            Some(Command::Principals("tomas", groups)) if groups.is_empty()
+        ));
+    }
+
+    #[test]
     fn a_typed_command_gets_its_own_colors_and_keeps_its_width() {
         let strip = |s: &str| {
             let mut out = String::new();
@@ -490,6 +633,10 @@ mod tests {
                 ansi(SUBCOMMAND, "grant"),
                 ansi(TEXT, "tomas acme")
             )
+        );
+        assert_eq!(
+            highlight_line("\\retract d3 stale"),
+            format!("{} {}", ansi(COMMAND, "\\retract"), ansi(TEXT, "d3 stale"))
         );
         assert_eq!(highlight_line("\\as"), ansi(TYPING, "\\as"));
         assert_eq!(
