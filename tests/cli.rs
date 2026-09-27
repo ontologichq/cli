@@ -34,6 +34,7 @@ fn user(name: &str, role: &str, tenants: &[&str]) -> pb::User {
         name: name.into(),
         role: role.into(),
         tenants: tenants.iter().map(|t| t.to_string()).collect(),
+        principals: Vec::new(),
     }
 }
 
@@ -652,6 +653,7 @@ fn an_import_prints_each_stage_as_the_engine_sends_it() {
                     pb::Relation {
                         object_kind: "percent".into(),
                         condition: "fully diluted".into(),
+                        rung: "supported".into(),
                         ..fact("r2", "Maya Chen", "holdsShare", "", "40%", 0.85)
                     },
                 ],
@@ -682,7 +684,10 @@ fn an_import_prints_each_stage_as_the_engine_sends_it() {
                     error: String::new(),
                 }),
                 more_evidence: vec![pb::MoreEvidence {
-                    relation: Some(fact("r3", "Maya Chen", "livesIn", "e4", "Toronto", 0.8)),
+                    relation: Some(pb::Relation {
+                        rung: "supported".into(),
+                        ..fact("r3", "Maya Chen", "livesIn", "e4", "Toronto", 0.8)
+                    }),
                     evidence: Some(pb::Evidence {
                         source_id: "s3".into(),
                         start: 0,
@@ -785,9 +790,9 @@ fn an_import_prints_each_stage_as_the_engine_sends_it() {
          \x20type     worksAt  the subject works for the object \
          (employee -> employer; inverse employs; one at a time)\n\
          \x20new      r1 Maya Chen worksAt Lumenworks 90% (new relation type)\n\
-         \x20new      r2 Maya Chen holdsShare \"40%\" percent (if fully diluted) 85%\n\
+         \x20new      r2 Maya Chen holdsShare \"40%\" percent (if fully diluted) 85% supported\n\
          \x20more     r3 Maya Chen livesIn Toronto + s3 80% \
-         \"Maya Chen joined Lumenworks in Toronto with Tomas.\" (fact now 80%)\n\
+         \"Maya Chen joined Lumenworks in Toronto with Tomas.\" (fact now 80% supported)\n\
          \x20linked   :e1(Maya Chen) joined [Lumenworks? e2 70%, e3 30%] in :e4(Toronto) \
          with [Tomas?].\n\
          \x20relink   s1 \"Maya\" → e1 Maya Chen 100%\n\
@@ -808,7 +813,8 @@ fn an_import_prints_each_stage_as_the_engine_sends_it() {
         imported,
         [pb::ImportRequest {
             tenant: "acme".into(),
-            text: text.into()
+            text: text.into(),
+            key: String::new()
         }]
     );
 }
@@ -966,7 +972,8 @@ fn a_blob_is_sent_by_its_file_name_and_prints_its_people_and_parts() {
         [pb::BlobRequest {
             tenant: "acme".into(),
             name: "launch.eml".into(),
-            content: content.as_bytes().to_vec()
+            content: content.as_bytes().to_vec(),
+            key: String::new()
         }]
     );
 }
@@ -1011,6 +1018,7 @@ fn a_question_prints_what_it_found_its_options_and_what_they_rest_on() {
                 something_else: 0.05,
                 notes: vec!["dropped r9, which is not in the context".into()],
                 exclusive: true,
+                count: None,
             })),
             ask_event(Ask::Finished(pb::Finished {
                 cost: Some(pb::Cost {
@@ -1350,6 +1358,7 @@ fn show_prints_the_tenant_an_entity_and_a_source() {
                             confidence: 0.6,
                         },
                     ],
+                    rung: "accepted".into(),
                     ..fact("r1", "Maya Chen", "worksAt", "e2", "Lumenworks", 0.9)
                 }],
                 mentions: vec![pb::Mention {
@@ -1424,7 +1433,7 @@ fn show_prints_the_tenant_an_entity_and_a_source() {
         "\n names    Maya Chen, Maya\n\
          \x20kind     person\n\
          \x20about    founder of Lumenworks\n\
-         \x20rel      r1 Maya Chen worksAt Lumenworks 90%\n\
+         \x20rel      r1 Maya Chen worksAt Lumenworks 90% accepted\n\
          \x20           s1 90% \"Maya Chen works at Lumenworks.\"\n\
          \x20           s2 60% \"Maya Chen, Priya Raman and Tomas moved the Lumenworks office…\"\n\
          \x20mentions s1 \"Maya Chen\" 0..9 → e1 Maya Chen 100% (by code) \
@@ -1718,4 +1727,274 @@ fn turtle_files_are_written_to_and_read_from_the_cli_directory() {
         summary: None,
     };
     assert_eq!(loaded, [sent.clone(), sent.clone(), sent]);
+}
+
+#[test]
+fn a_computed_count_shows_its_floor_and_its_ceiling() {
+    let engine = engine();
+    engine.reply(Rpc::CreateTenant, tenant("acme", 0, 0, 0));
+    let counted = |answer: &str, operation: &str, lower, upper, status: &str| {
+        vec![ask_event(Ask::Answer(pb::AskAnswer {
+            options: vec![pb::AnswerOption {
+                answer: answer.into(),
+                probability: 0.9,
+                ..Default::default()
+            }],
+            something_else: 0.1,
+            exclusive: true,
+            count: Some(pb::CountRange {
+                operation: operation.into(),
+                lower,
+                upper,
+                status: status.into(),
+            }),
+            ..Default::default()
+        }))]
+    };
+    engine.stream(
+        Rpc::Ask,
+        counted("3 or 4 postmortems", "count", 3, Some(4), "bounded"),
+    );
+    engine.stream(
+        Rpc::Ask,
+        counted("8 customers", "distinct customer", 8, Some(8), "exact"),
+    );
+    engine.stream(
+        Rpc::Ask,
+        counted("at least 5", "count", 5, None, "over the records held"),
+    );
+    let dir = workdir("count");
+    let out = ontologic(
+        &engine,
+        &dir,
+        "\\t create acme\n\\ask how many postmortems in May\n\\ask how many customers\n\
+         \\ask how many tickets\n",
+    );
+    assert_has(
+        &out,
+        "acme>  answer   3 or 4 postmortems 90%  no evidence named\n\
+         \x20         something else 10%\n\
+         \x20computed count 3 to 4 (bounded)\nacme> ",
+    );
+    assert_has(&out, " computed distinct customer 8 (exact)\n");
+    assert_has(&out, " computed count at least 5 (over the records held)\n");
+}
+
+#[test]
+fn documents_are_retracted_restored_and_erased_once_the_tenant_is_named() {
+    let engine = engine();
+    engine.reply(Rpc::CreateTenant, tenant("acme", 0, 0, 0));
+    let counts = |entities, sources, relations| {
+        Some(pb::Counts {
+            entities,
+            relations,
+            sources,
+        })
+    };
+    let changed = |documents: &[&str], before, after| pb::LifecycleReply {
+        documents: documents.iter().map(|d| d.to_string()).collect(),
+        before,
+        after,
+    };
+    engine.reply(
+        Rpc::Retract,
+        changed(&["d1", "d2"], counts(5, 3, 4), counts(3, 1, 2)),
+    );
+    engine.reply(
+        Rpc::Restore,
+        changed(&["d1"], counts(3, 1, 2), counts(4, 2, 3)),
+    );
+    engine.reply(
+        Rpc::Erase,
+        changed(&["d2"], counts(4, 2, 3), counts(2, 1, 1)),
+    );
+    let dir = workdir("documents");
+    let out = ontologic(
+        &engine,
+        &dir,
+        "\\retract d1\n\\t create acme\n\\retract d1 d2 \"an old copy\"\n\\restore d1\n\
+         \\erase d2 asked to\nacme-2\n\\erase d2 asked to\nacme\n\\retract why\n\\erase\n",
+    );
+    assert_has(
+        &out,
+        "ontologic> error: no tenant: run \\t create <name> first\n",
+    );
+    assert_has(
+        &out,
+        "acme> retracted d1, d2: 5 entities · 3 sources · 4 relations → 3 entities · 1 source · \
+         2 relations\n",
+    );
+    assert_has(
+        &out,
+        "acme> restored d1: 3 entities · 1 source · 2 relations → 4 entities · 2 sources · \
+         3 relations\n",
+    );
+    let asked = "acme> warning: erasing destroys d2 for good; only a tombstone with each version's \
+                 hash stays\ntype the tenant's name, acme, to erase; anything else cancels\n";
+    assert_has(&out, &format!("{asked}confirm> nothing erased\n"));
+    assert_has(
+        &out,
+        &format!(
+            "{asked}confirm> erased d2: 4 entities · 2 sources · 3 relations → 2 entities · \
+             1 source · 1 relation\nacme> "
+        ),
+    );
+    assert_has(&out, "acme> error: usage: \\retract <doc...> [reason]\n");
+    assert_has(&out, "acme> error: usage: \\erase <doc...> [reason]\n");
+    let sent = |rpc| -> Vec<pb::DocumentsRequest> {
+        calls_to(&engine, rpc).iter().map(Call::request).collect()
+    };
+    let request = |documents: &[&str], reason: &str| pb::DocumentsRequest {
+        tenant: "acme".into(),
+        documents: documents.iter().map(|d| d.to_string()).collect(),
+        reason: reason.into(),
+    };
+    assert_eq!(sent(Rpc::Retract), [request(&["d1", "d2"], "an old copy")]);
+    assert_eq!(sent(Rpc::Restore), [request(&["d1"], "")]);
+    assert_eq!(
+        sent(Rpc::Erase),
+        [request(&["d2"], "asked to")],
+        "erased once, and only after the tenant's name"
+    );
+}
+
+#[test]
+fn a_migration_shows_what_it_changes_and_commits_only_on_yes() {
+    let engine = engine();
+    engine.reply(Rpc::CreateTenant, tenant("acme", 0, 0, 0));
+    let diff = pb::MigrationDiff {
+        facts_added: 3,
+        facts_removed: 1,
+        promoted: 2,
+        support_changed: 4,
+        facts_unchanged: 120,
+        entities_renamed: 1,
+        by_type: vec![pb::TypeChange {
+            relation_type: "hasCustomer".into(),
+            added: 3,
+            removed: 1,
+            promoted: 2,
+            demoted: 0,
+        }],
+        ..Default::default()
+    };
+    let migrated = |committed| pb::MigrateReply {
+        committed,
+        diff: Some(diff.clone()),
+    };
+    engine.reply(Rpc::Migrate, migrated(false));
+    engine.reply(Rpc::Migrate, migrated(false));
+    engine.reply(Rpc::Migrate, migrated(true));
+    let dir = workdir("migrate");
+    let out = ontologic(
+        &engine,
+        &dir,
+        "\\t create acme\n\\migrate ticket:13 postmortem:5 new rules\nno\n\\migrate ticket:13\n\
+         yes\n\\migrate ticket\n",
+    );
+    let shown = "── migrate acme ──";
+    let staged = " pins     ticket:13 · postmortem:5\n\
+                  \x20facts    3 added · 1 removed · 2 promoted · 0 demoted · 4 support changed · \
+                  120 unchanged\n\
+                  \x20entities 0 added · 0 removed · 1 renamed · 0 identity changed\n\
+                  \x20types    hasCustomer 3 added · 1 removed · 2 promoted\n\
+                  \x20calls    0 model calls\n\
+                  \x20state    staged, nothing written\n\
+                  type yes to commit it; anything else cancels\nconfirm> nothing committed\n";
+    assert_has(&out, &format!("acme> {shown}"));
+    assert_has(&out, staged);
+    assert_has(&out, &format!("confirm> {shown}"));
+    assert_has(&out, " pins     ticket:13\n facts    3 added · 1 removed");
+    assert_has(&out, " calls    0 model calls\n state    committed\nacme> ");
+    assert_has(
+        &out,
+        "acme> error: usage: \\migrate <kind:version ...> [reason]\n",
+    );
+    let sent: Vec<pb::MigrateRequest> = calls_to(&engine, Rpc::Migrate)
+        .iter()
+        .map(Call::request)
+        .collect();
+    let request = |pins: &[(&str, u32)], reason: &str, commit| pb::MigrateRequest {
+        tenant: "acme".into(),
+        kind: pb::MigrationKind::Reprojection as i32,
+        pins: pins
+            .iter()
+            .map(|(kind, version)| pb::SchemaPin {
+                kind: kind.to_string(),
+                version: *version,
+            })
+            .collect(),
+        reason: reason.into(),
+        commit,
+    };
+    assert_eq!(
+        sent,
+        [
+            request(&[("ticket", 13), ("postmortem", 5)], "new rules", false),
+            request(&[("ticket", 13)], "", false),
+            request(&[("ticket", 13)], "", true),
+        ]
+    );
+}
+
+#[test]
+fn admins_say_who_reads_a_document_and_what_a_member_reads_as() {
+    let engine = engine();
+    engine.reply(Rpc::CreateTenant, tenant("acme", 0, 0, 0));
+    engine.reply(Rpc::SetAcl, pb::Empty {});
+    let groups = vec!["group:sales".to_string(), "group:eng".to_string()];
+    engine.reply(
+        Rpc::SetPrincipals,
+        pb::User {
+            principals: vec![pb::TenantGroups {
+                tenant: "acme".into(),
+                groups: groups.clone(),
+            }],
+            ..user("tomas", "member", &["acme"])
+        },
+    );
+    let dir = workdir("access");
+    let out = ontologic(
+        &engine,
+        &dir,
+        "\\t create acme\n\\acl d2 group:finance user:maya\n\\acl d2\n\
+         \\principals tomas group:sales group:eng\n\\principals\n",
+    );
+    assert_has(
+        &out,
+        "acme> d2 is read by group:finance, user:maya from now on, and by every admin\n",
+    );
+    assert_has(
+        &out,
+        "acme> error: usage: \\acl <doc> <principal...> (user:<name> or a group)\n",
+    );
+    assert_has(
+        &out,
+        "acme> tomas reads acme as user:tomas, group:sales, group:eng\n",
+    );
+    assert_has(&out, "acme> error: usage: \\principals <user> <group...>\n");
+    let acl: Vec<pb::AclRequest> = calls_to(&engine, Rpc::SetAcl)
+        .iter()
+        .map(Call::request)
+        .collect();
+    assert_eq!(
+        acl,
+        [pb::AclRequest {
+            tenant: "acme".into(),
+            document: "d2".into(),
+            principals: vec!["group:finance".into(), "user:maya".into()],
+        }]
+    );
+    let given: Vec<pb::PrincipalsRequest> = calls_to(&engine, Rpc::SetPrincipals)
+        .iter()
+        .map(Call::request)
+        .collect();
+    assert_eq!(
+        given,
+        [pb::PrincipalsRequest {
+            user: "tomas".into(),
+            tenant: "acme".into(),
+            groups,
+        }]
+    );
 }

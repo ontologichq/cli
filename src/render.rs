@@ -122,14 +122,27 @@ fn relation(r: &pb::Relation) -> String {
         true => String::new(),
         false => format!(" {}", yellow(&format!("(if {})", r.condition))),
     };
+    let rung = match r.rung.is_empty() {
+        true => String::new(),
+        false => format!(" {}", dim(&r.rung)),
+    };
     format!(
-        "{} {} {} {}{condition} {}{fresh}",
+        "{} {} {} {}{condition} {}{rung}{fresh}",
         dim(&r.id),
         bold(&r.subject_name),
         magenta(&r.predicate),
         object(r),
         percent(r.confidence)
     )
+}
+
+/// `90% accepted`: how sure a fact is and what it may be used for; an engine that does not rank
+/// its facts says only how sure.
+fn sure(r: &pb::Relation) -> String {
+    match r.rung.is_empty() {
+        true => percent_plain(r.confidence),
+        false => format!("{} {}", percent_plain(r.confidence), r.rung),
+    }
 }
 
 /// `s5 90% "Tomas still lives in Toronto"`, the words cut to 60 characters.
@@ -159,7 +172,7 @@ fn more_evidence(m: &pb::MoreEvidence) -> String {
         object(r),
         dim("+"),
         evidence_line(e),
-        dim(&format!("(fact now {})", percent_plain(r.confidence)))
+        dim(&format!("(fact now {})", sure(r)))
     )
 }
 
@@ -691,6 +704,9 @@ pub fn ask_answer(e: &pb::AskAnswer, facts: bool) -> String {
         ))),
     }
     let mut out = vec![row("answer", &lines)];
+    if let Some(count) = &e.count {
+        out.push(row("computed", &[computed(count)]));
+    }
     if !e.notes.is_empty() {
         let notes: Vec<String> = e.notes.iter().map(|n| yellow(n)).collect();
         out.push(row("check", &notes));
@@ -714,6 +730,24 @@ pub fn ask_answer(e: &pb::AskAnswer, facts: bool) -> String {
         (false, true) => {}
     }
     out.join("\n")
+}
+
+/// `count 3 to 4 (bounded)`: a number the engine computed, from its floor to its ceiling (`at
+/// least` when nothing bounds it), and how far it can be claimed.
+fn computed(c: &pb::CountRange) -> String {
+    let range = match c.upper {
+        Some(upper) if upper == c.lower => upper.to_string(),
+        Some(upper) => format!("{} to {upper}", c.lower),
+        None => format!("at least {}", c.lower),
+    };
+    let mut parts = vec![bold(&range)];
+    if !c.operation.is_empty() {
+        parts.insert(0, c.operation.clone());
+    }
+    if !c.status.is_empty() {
+        parts.push(dim(&format!("({})", c.status)));
+    }
+    parts.join(" ")
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1015,6 +1049,136 @@ pub fn source_view(v: &pb::SourceView) -> String {
     out.push(row("rel", &relations));
     out.push(row("linked", &[linked(&v.segments)]));
     out.join("\n")
+}
+
+// ---------------------------------------------------------------------------------------
+// Documents out and back, migrations and who reads what
+
+/// `retracted d3: 5 entities · 3 sources · 4 relations → 3 entities · 2 sources · 2 relations`.
+pub fn lifecycle(done: &str, reply: &pb::LifecycleReply) -> String {
+    let counts = |c: Option<pb::Counts>| {
+        let c = c.unwrap_or_default();
+        format!(
+            "{} · {} · {}",
+            count(c.entities.into(), "entity", "entities"),
+            count(c.sources.into(), "source", "sources"),
+            count(c.relations.into(), "relation", "relations")
+        )
+    };
+    format!(
+        "{done} {}: {} → {}",
+        reply.documents.join(", "),
+        counts(reply.before),
+        counts(reply.after)
+    )
+}
+
+/// What `\\erase` asks before anything is destroyed.
+pub fn erase_question(request: &pb::DocumentsRequest) -> String {
+    let what = format!(
+        "erasing destroys {} for good; only a tombstone with each version's hash stays",
+        request.documents.join(", ")
+    );
+    format!(
+        "{}\ntype the tenant's name, {}, to erase; anything else cancels",
+        warning(&what),
+        bold(&request.tenant)
+    )
+}
+
+/// `\\migrate`: what reading the tenant under the pinned schema versions changes, staged or
+/// committed.
+pub fn migration(request: &pb::MigrateRequest, reply: &pb::MigrateReply) -> String {
+    let d = reply.diff.clone().unwrap_or_default();
+    let pins: Vec<String> = request
+        .pins
+        .iter()
+        .map(|p| format!("{}:{}", p.kind, p.version))
+        .collect();
+    let mut out = vec![
+        header(&format!("migrate {}", request.tenant)),
+        row("pins", &[pins.join(" · ")]),
+        row(
+            "facts",
+            &[format!(
+                "{} added · {} removed · {} promoted · {} demoted · {} support changed · {} \
+                 unchanged",
+                d.facts_added,
+                d.facts_removed,
+                d.promoted,
+                d.demoted,
+                d.support_changed,
+                d.facts_unchanged
+            )],
+        ),
+        row(
+            "entities",
+            &[format!(
+                "{} added · {} removed · {} renamed · {} identity changed",
+                d.entities_added, d.entities_removed, d.entities_renamed, d.identity_changed
+            )],
+        ),
+    ];
+    let types: Vec<String> = d
+        .by_type
+        .iter()
+        .map(|t| {
+            let changes: Vec<String> = [
+                (t.added, "added"),
+                (t.removed, "removed"),
+                (t.promoted, "promoted"),
+                (t.demoted, "demoted"),
+            ]
+            .iter()
+            .filter(|(n, _)| *n > 0)
+            .map(|(n, what)| format!("{n} {what}"))
+            .collect();
+            format!("{} {}", magenta(&t.relation_type), changes.join(" · "))
+        })
+        .collect();
+    if !types.is_empty() {
+        out.push(row("types", &types));
+    }
+    out.push(row(
+        "calls",
+        &[count(d.model_calls.into(), "model call", "model calls")],
+    ));
+    out.push(row(
+        "state",
+        &[match reply.committed {
+            true => green("committed"),
+            false => yellow("staged, nothing written"),
+        }],
+    ));
+    out.join("\n")
+}
+
+/// `\\acl`: who reads a document now.
+pub fn acl(doc: &str, principals: &[&str]) -> String {
+    format!(
+        "{} is read by {} from now on, and by every admin",
+        blue(doc),
+        principals.join(", ")
+    )
+}
+
+/// `\\principals`: what a member reads a tenant's documents as, themselves first.
+pub fn principals(user: &pb::User, tenant: &str) -> String {
+    let groups = user
+        .principals
+        .iter()
+        .find(|p| p.tenant == tenant)
+        .map(|p| p.groups.clone())
+        .unwrap_or_default();
+    let every: Vec<String> = std::iter::once(format!("user:{}", user.name))
+        .chain(groups)
+        .collect();
+    format!(
+        "{} reads {} as {}",
+        bold(&user.name),
+        blue(tenant),
+        every.join(", ")
+    )
 }
 
 // ---------------------------------------------------------------------------------------

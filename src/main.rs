@@ -141,6 +141,7 @@ fn main() {
         current: None,
         session: pb::Cost::default(),
         names: Default::default(),
+        pending: None,
     };
     say(&format!(
         "{} {}",

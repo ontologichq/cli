@@ -30,6 +30,12 @@ pub const HELP: &str = "\
 \\ask --facts <q>      answer from facts alone, with no source text: what the graph holds
 \\commit               make the staged imports part of the tenant, so questions see them
 \\rollback             drop the staged imports (and the re-links they made)
+\\retract <d> [why]    take documents (d3 ...) out of every answer, count and link
+\\restore <d>          put retracted documents back
+\\erase <d> [why]      admins: destroy documents for good, once you type the tenant's name
+\\migrate <kind:v>     admins: the diff other schema versions make, then commit it or not
+\\acl <d> <who...>     admins: who may read a document (user:<name> or a group)
+\\principals <u> <g>   admins: the groups member <u> reads this tenant as
 \\s                    what the tenant knows, and what it cost
 \\s <id>               everything about an entity (e1) or a source (s1)
 \\u me                 your user, role and tenants
@@ -54,6 +60,16 @@ pub struct Cli {
     pub session: pb::Cost,
     /// What tab completes; filled from replies.
     pub names: Rc<RefCell<input::Names>>,
+    /// A command that goes ahead only if the next line says so.
+    pub pending: Option<Pending>,
+}
+
+/// What the next line confirms; any other line cancels it.
+pub enum Pending {
+    /// These documents erased, once the tenant's name is typed.
+    Erase(pb::DocumentsRequest),
+    /// This migration committed, once `yes` is typed.
+    Migrate(pb::MigrateRequest),
 }
 
 fn add_cost(total: &mut pb::Cost, cost: &pb::Cost) {
@@ -179,6 +195,10 @@ impl Cli {
             Command::Show(id) => self.show(id).map(Some),
             Command::Commit => self.commit(true).map(Some),
             Command::Rollback => self.commit(false).map(Some),
+            Command::Documents(verb, documents) => self.documents(verb, &documents).map(Some),
+            Command::Migrate(migration) => self.migrate(&migration).map(Some),
+            Command::Acl(doc, principals) => self.acl(doc, &principals).map(Some),
+            Command::Principals(user, groups) => self.principals(user, &groups).map(Some),
             Command::Version => self.version().map(Some),
             Command::Help => Ok(Some(HELP.to_string())),
             Command::Quit => unreachable!("handled by the loop"),
@@ -322,9 +342,11 @@ impl Cli {
     fn import_fact(&mut self, text: &str) -> Result<(), String> {
         let tenant = self.tenant()?;
         let mut client = self.client.clone();
+        // No key: every import from the CLI is a document of its own.
         let request = pb::ImportRequest {
             tenant,
             text: text.to_string(),
+            key: String::new(),
         };
         let stream = self.call(self.rt.block_on(client.import(request)))?;
         self.follow_import(stream)
@@ -342,6 +364,7 @@ impl Cli {
             tenant,
             name,
             content,
+            key: String::new(),
         };
         let stream = self
             .call(self.rt.block_on(client.import_blob(request)))
@@ -466,6 +489,113 @@ impl Cli {
         }
     }
 
+    /// `\\retract` and `\\restore` at once; `\\erase` asks for the tenant's name first.
+    fn documents(&mut self, verb: &str, documents: &input::Documents) -> Result<String, String> {
+        if documents.ids.is_empty() {
+            return Err(format!("usage: \\{verb} <doc...> [reason]"));
+        }
+        let request = pb::DocumentsRequest {
+            tenant: self.tenant()?,
+            documents: documents.ids.iter().map(|id| id.to_string()).collect(),
+            reason: documents.reason.to_string(),
+        };
+        let mut client = self.client.clone();
+        let reply = match verb {
+            "retract" => self.rt.block_on(client.retract(request)),
+            "restore" => self.rt.block_on(client.restore(request)),
+            _ => {
+                let question = render::erase_question(&request);
+                self.pending = Some(Pending::Erase(request));
+                return Ok(question);
+            }
+        };
+        let done = match verb {
+            "retract" => "retracted",
+            _ => "restored",
+        };
+        Ok(render::lifecycle(done, &self.call(reply)?))
+    }
+
+    /// `\\migrate`: the migration staged and its diff shown, then committed if the next line is
+    /// `yes`.
+    fn migrate(&mut self, migration: &input::Migration) -> Result<String, String> {
+        if migration.pins.is_empty() {
+            return Err("usage: \\migrate <kind:version ...> [reason]".into());
+        }
+        let mut request = pb::MigrateRequest {
+            tenant: self.tenant()?,
+            kind: pb::MigrationKind::Reprojection as i32,
+            pins: migration
+                .pins
+                .iter()
+                .map(|(kind, version)| pb::SchemaPin {
+                    kind: kind.to_string(),
+                    version: *version,
+                })
+                .collect(),
+            reason: migration.reason.to_string(),
+            commit: false,
+        };
+        let mut client = self.client.clone();
+        let staged = self.call(self.rt.block_on(client.migrate(request.clone())))?;
+        request.commit = true;
+        let shown = render::migration(&request, &staged);
+        self.pending = Some(Pending::Migrate(request));
+        Ok(format!(
+            "{shown}\ntype yes to commit it; anything else cancels"
+        ))
+    }
+
+    /// The line after `\\erase` or a staged `\\migrate`: the tenant's name erases, `yes`
+    /// commits, and anything else leaves the tenant as it is.
+    fn confirm(&mut self, pending: Pending, line: &str) -> Result<String, String> {
+        let mut client = self.client.clone();
+        match pending {
+            Pending::Erase(request) if line == request.tenant => {
+                let erased = self.call(self.rt.block_on(client.erase(request)))?;
+                Ok(render::lifecycle("erased", &erased))
+            }
+            Pending::Migrate(request) if line == "yes" => {
+                let committed = self.call(self.rt.block_on(client.migrate(request.clone())))?;
+                Ok(render::migration(&request, &committed))
+            }
+            Pending::Erase(_) => Ok("nothing erased".into()),
+            Pending::Migrate(_) => Ok("nothing committed".into()),
+        }
+    }
+
+    /// `\\acl`: who may read a document from now on.
+    fn acl(&mut self, doc: &str, principals: &[&str]) -> Result<String, String> {
+        if doc.is_empty() || principals.is_empty() {
+            return Err("usage: \\acl <doc> <principal...> (user:<name> or a group)".into());
+        }
+        let request = pb::AclRequest {
+            tenant: self.tenant()?,
+            document: doc.to_string(),
+            principals: principals.iter().map(|p| p.to_string()).collect(),
+        };
+        let mut client = self.client.clone();
+        self.call(self.rt.block_on(client.set_acl(request)))?;
+        Ok(render::acl(doc, principals))
+    }
+
+    /// `\\principals`: the groups a member reads the current tenant's documents as; none leaves
+    /// them reading as themselves.
+    fn principals(&mut self, user: &str, groups: &[&str]) -> Result<String, String> {
+        if user.is_empty() {
+            return Err("usage: \\principals <user> <group...>".into());
+        }
+        let tenant = self.tenant()?;
+        let request = pb::PrincipalsRequest {
+            user: user.to_string(),
+            tenant: tenant.clone(),
+            groups: groups.iter().map(|g| g.to_string()).collect(),
+        };
+        let mut client = self.client.clone();
+        let member = self.call(self.rt.block_on(client.set_principals(request)))?;
+        Ok(render::principals(&member, &tenant))
+    }
+
     fn show(&mut self, id: &str) -> Result<String, String> {
         use pb::show_reply::View;
         let tenant = self.tenant()?;
@@ -488,11 +618,21 @@ impl Cli {
     }
 
     pub fn prompt(&self) -> String {
-        format!("{}> ", self.current.as_deref().unwrap_or("ontologic"))
+        match self.pending {
+            Some(_) => "confirm> ".to_string(),
+            None => format!("{}> ", self.current.as_deref().unwrap_or("ontologic")),
+        }
     }
 
     /// Runs one line; false means quit.
     pub fn line(&mut self, line: &str) -> bool {
+        if let Some(pending) = self.pending.take() {
+            match self.confirm(pending, line.trim()) {
+                Ok(text) => say(&text),
+                Err(e) => say(&render::error(&e)),
+            }
+            return true;
+        }
         let Some(command) = input::parse(line) else {
             return true;
         };
