@@ -42,7 +42,7 @@ printf '\\t checkout acme\n\\ask who founded Lumenworks\n' | ontologic -h engine
 Typed commands keep a history in `.ontologic_history` in the current directory, and tab completes
 commands, tenant names, ids and file names. Questions, feedback and lines that are not commands are
 never written there: the up arrow finds them until the CLI ends, and a question an older CLI wrote
-to the file is dropped from it.
+to the file is dropped from it (when the file cannot be rewritten, the CLI warns and names it).
 
 ## Commands
 
