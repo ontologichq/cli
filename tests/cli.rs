@@ -2046,31 +2046,46 @@ fn admins_set_how_long_a_tenant_keeps_its_question_log() {
 
 /// Runs `ontologic` signed in as `USER` in `dir` with a pseudo-terminal for its stdin, as
 /// someone typing, so it keeps a history file. With `TERM=dumb` the line editor reads whole lines
-/// and prints only its prompt; `\x04` (Ctrl-D) at the start of a line ends the input. A CLI still
-/// running after 30 s is killed and the test fails.
+/// and prints only its prompt; `\x04` (Ctrl-D) at the start of a line ends the input. Typing,
+/// reading the terminal's echo and waiting for the CLI never block: a CLI still running after
+/// 30 s is killed and the test fails.
 #[cfg(unix)]
 fn typed(engine: &FakeEngine, dir: &Path, input: &str) -> Run {
     use std::ffi::CStr;
     use std::fs::{File, OpenOptions};
-    use std::io::Read;
-    use std::os::fd::FromRawFd;
+    use std::io::{ErrorKind, Read};
+    use std::os::fd::{AsRawFd, FromRawFd};
     use std::os::unix::fs::OpenOptionsExt;
+    use std::sync::Mutex;
     use std::time::{Duration, Instant};
 
-    // SAFETY: the descriptor is checked before it is owned, and ptsname's buffer is copied
-    // before any other call (no other test opens a terminal).
+    /// ptsname answers in one buffer for the whole process, and tests run at once.
+    static PTSNAME: Mutex<()> = Mutex::new(());
+    // SAFETY: the descriptor is checked before it is owned, and ptsname's buffer is copied while
+    // no other thread can call it.
     let (mut keyboard, name) = unsafe {
-        let fd = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
+        let fd = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY | libc::O_NONBLOCK);
         assert!(fd >= 0, "{}", std::io::Error::last_os_error());
         let keyboard = File::from_raw_fd(fd);
         assert_eq!(libc::grantpt(fd), 0);
         assert_eq!(libc::unlockpt(fd), 0);
+        let _only = PTSNAME
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let name = CStr::from_ptr(libc::ptsname(fd))
             .to_str()
             .unwrap()
             .to_string();
         (keyboard, name)
     };
+    // Some systems ignore O_NONBLOCK on posix_openpt; set it again.
+    // SAFETY: fcntl on a descriptor `keyboard` owns.
+    unsafe {
+        let fd = keyboard.as_raw_fd();
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        assert!(flags >= 0, "{}", std::io::Error::last_os_error());
+        assert_eq!(libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK), 0);
+    }
     let terminal = OpenOptions::new()
         .read(true)
         .write(true)
@@ -2097,13 +2112,22 @@ fn typed(engine: &FakeEngine, dir: &Path, input: &str) -> Run {
             String::from_utf8_lossy(&bytes).into_owned()
         })
     };
-    // The terminal echoes what is typed; read it so the echo never fills the terminal's buffer.
-    let echo = read_all(Box::new(keyboard.try_clone().unwrap()));
     let stdout = read_all(Box::new(child.stdout.take().unwrap()));
     let stderr = read_all(Box::new(child.stderr.take().unwrap()));
-    keyboard.write_all(input.as_bytes()).unwrap();
+    let mut typing = input.as_bytes();
+    let mut echo = [0u8; 4096];
     let deadline = Instant::now() + Duration::from_secs(30);
     let status = loop {
+        // Type what the terminal takes now, and read its echo so the echo never fills it.
+        while !typing.is_empty() {
+            match keyboard.write(typing) {
+                Ok(n) => typing = &typing[n..],
+                Err(e) if e.kind() == ErrorKind::WouldBlock => break,
+                // The CLI is gone and its terminal with it.
+                Err(_) => typing = &[],
+            }
+        }
+        while matches!(keyboard.read(&mut echo), Ok(n) if n > 0) {}
         if let Some(status) = child.try_wait().unwrap() {
             break Some(status);
         }
@@ -2114,8 +2138,8 @@ fn typed(engine: &FakeEngine, dir: &Path, input: &str) -> Run {
         }
         std::thread::sleep(Duration::from_millis(10));
     };
+    // The CLI has ended, so its stdout and stderr are closed and these end.
     let (stdout, stderr) = (stdout.join().unwrap(), stderr.join().unwrap());
-    let _ = echo.join();
     let Some(status) = status else {
         panic!("ontologic was still running after 30 s and was killed:\n{stdout}{stderr}");
     };
