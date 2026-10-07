@@ -87,6 +87,7 @@ says `withheld` and why.
 A tenant whose admin set `\t asklog` keeps each question and its answer, and the answer ends with
 `kept as <id>`. Until the next question, `\good`, `\partly` or `\bad` tells the engine whether
 that answer was right, with a note of at most 1024 bytes if you like. Only the one who asked can.
+An engine older than kit 0.3.0 keeps no question log, and the CLI says so.
 
 ## Develop
 

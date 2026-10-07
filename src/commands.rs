@@ -54,6 +54,9 @@ Up and down arrows walk the history.";
 const IMPORT_USAGE: &str = "usage: \\import fact <sentence> | \\import blob <file>";
 const TENANT_USAGE: &str = "usage: \\t create <name> | \\t checkout <name> | \\t get | \\t delete <name> | \\t export <file> | \\t import <file> | \\t users | \\t meta [name] | \\t asklog <days>";
 const ASK_LOG_USAGE: &str = "usage: \\t asklog <days>, 0 to 365; 0 stops the log and deletes it";
+/// What an engine older than kit 0.3.0 means when it answers `Feedback` or `SetAskLog` with an
+/// UNIMPLEMENTED that carries no message.
+const NO_ASK_LOG: &str = "this engine keeps no question log (it is older than kit 0.3.0)";
 /// The longest note `\\good`, `\\partly` and `\\bad` send, in bytes; the engine refuses longer.
 const NOTE_BYTES: usize = 1024;
 const USER_USAGE: &str =
@@ -138,6 +141,14 @@ impl Cli {
         result
             .map(tonic::Response::into_inner)
             .map_err(|status| describe(&status, &self.host))
+    }
+
+    /// `call` for `Feedback` and `SetAskLog`, which an engine older than kit 0.3.0 does not have.
+    fn call_ask_log<T>(&self, result: Result<tonic::Response<T>, Status>) -> Result<T, String> {
+        match result {
+            Err(status) if status.code() == Code::Unimplemented => Err(NO_ASK_LOG.into()),
+            result => self.call(result),
+        }
     }
 
     /// Prints the engine, its model and who is signed in. Returns false when the user or key
@@ -291,7 +302,7 @@ impl Cli {
                     tenant: tenant.clone(),
                     keep_days: days,
                 };
-                self.call(self.rt.block_on(client.set_ask_log(request)))?;
+                self.call_ask_log(self.rt.block_on(client.set_ask_log(request)))?;
                 Ok(render::ask_log(&tenant, days))
             }
             "delete" => {
@@ -516,7 +527,7 @@ impl Cli {
             note: note.to_string(),
         };
         let mut client = self.client.clone();
-        self.call(self.rt.block_on(client.feedback(request)))?;
+        self.call_ask_log(self.rt.block_on(client.feedback(request)))?;
         Ok(render::feedback(&ask_id, verdict, !note.is_empty()))
     }
 

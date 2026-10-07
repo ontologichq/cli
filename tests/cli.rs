@@ -1977,6 +1977,26 @@ fn a_refused_question_leaves_the_answer_before_it_unjudged() {
 }
 
 #[test]
+fn an_engine_older_than_the_question_log_says_it_keeps_none() {
+    let engine = engine();
+    engine.reply(Rpc::CreateTenant, tenant("acme", 0, 0, 0));
+    engine.stream(Rpc::Ask, logged_answer("a1", &[]));
+    // What an engine without the calls answers: no message.
+    engine.fail(Rpc::Feedback, Status::unimplemented(""));
+    engine.fail(Rpc::SetAskLog, Status::unimplemented(""));
+    let dir = workdir("ask-log-older-engine");
+    let out = ontologic(
+        &engine,
+        &dir,
+        "\\t create acme\n\\ask who founded Lumenworks\n\\bad wrong person\n\\t asklog 30\n",
+    );
+    let older = "acme> error: this engine keeps no question log (it is older than kit 0.3.0)\n";
+    assert_eq!(out.matches(older).count(), 2, "{out}");
+    assert_eq!(calls_to(&engine, Rpc::Feedback).len(), 1);
+    assert_eq!(calls_to(&engine, Rpc::SetAskLog).len(), 1);
+}
+
+#[test]
 fn admins_set_how_long_a_tenant_keeps_its_question_log() {
     let engine = engine();
     engine.reply(Rpc::CreateTenant, tenant("acme", 0, 0, 0));
