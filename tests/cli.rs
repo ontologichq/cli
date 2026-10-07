@@ -2160,6 +2160,39 @@ fn a_history_file_an_older_cli_wrote_is_cleared_when_the_cli_starts() {
     assert!(!history.exists(), "{:?}", std::fs::read_to_string(&history));
 }
 
+#[cfg(unix)]
+#[test]
+fn a_history_file_that_cannot_be_cleared_says_where_it_is() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // SAFETY: geteuid only reads the process's user id.
+    if unsafe { libc::geteuid() } == 0 {
+        eprintln!("skipped: root writes a read-only file");
+        return;
+    }
+    let engine = engine();
+    let dir = workdir("history-read-only");
+    let history = dir.join(".ontologic_history");
+    let older = "#V2\n\\\\t get\n\\\\ask who owns Lumenworks\n";
+    std::fs::write(&history, older).unwrap();
+    std::fs::set_permissions(&history, std::fs::Permissions::from_mode(0o400)).unwrap();
+    let run = typed(&engine, &dir, "\x04");
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_has(
+        &run.stderr,
+        &format!(
+            "warning: {} still holds questions or feedback an older CLI wrote, and they could not \
+             be removed (",
+            dir.canonicalize()
+                .unwrap()
+                .join(".ontologic_history")
+                .display()
+        ),
+    );
+    assert_has(&run.stderr, "); delete the file\n");
+    assert_eq!(std::fs::read_to_string(&history).unwrap(), older);
+}
+
 #[test]
 fn a_set_page_the_cli_never_asks_for_prints_only_its_count() {
     let engine = engine();

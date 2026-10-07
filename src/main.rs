@@ -85,11 +85,21 @@ fn interactive(cli: &mut Cli) -> rustyline::Result<()> {
                 false => dropped = true,
             }
         }
-        if dropped {
-            let _ = match file.is_empty() {
-                true => std::fs::remove_file(path).map_err(Into::into),
-                false => file.save(path),
-            };
+        let cleared = match (dropped, file.is_empty()) {
+            (false, _) => Ok(()),
+            (true, true) => std::fs::remove_file(path).map_err(|e| e.to_string()),
+            (true, false) => file.save(path).map_err(|e| e.to_string()),
+        };
+        if let Err(e) = cleared {
+            let at = std::env::current_dir().map_or(path.to_path_buf(), |dir| dir.join(path));
+            eprintln!(
+                "{}",
+                render::warning(&format!(
+                    "{} still holds questions or feedback an older CLI wrote, and they could not \
+                     be removed ({e}); delete the file",
+                    at.display()
+                ))
+            );
         }
     }
     loop {
