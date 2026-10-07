@@ -70,7 +70,7 @@ pub struct Cli {
     /// A command that goes ahead only if the next line says so.
     pub pending: Option<Pending>,
     /// The tenant and id of the last answer the engine logged, what `\\good`, `\\partly` and
-    /// `\\bad` judge; each question clears it.
+    /// `\\bad` judge; each `\\ask` clears it, a refused one too.
     pub last_ask: Option<(String, String)>,
 }
 
@@ -198,10 +198,14 @@ impl Cli {
                 self.import_blob(file).map(|()| None)
             }
             Command::Import(..) => Err(IMPORT_USAGE.into()),
-            Command::Ask(q) if q.text.is_empty() => {
-                Err("usage: \\ask [--staged] [--facts] <question>".into())
+            Command::Ask(q) => {
+                // Any question, a refused one too, leaves the answer before it unjudged.
+                self.last_ask = None;
+                match q.text.is_empty() {
+                    true => Err("usage: \\ask [--staged] [--facts] <question>".into()),
+                    false => self.ask(&q).map(|()| None),
+                }
             }
-            Command::Ask(q) => self.ask(&q).map(|()| None),
             Command::Feedback(verdict, note) => self.feedback(verdict, note).map(Some),
             Command::Show(id) => self.show(id).map(Some),
             Command::Commit => self.commit(true).map(Some),
@@ -455,7 +459,6 @@ impl Cli {
         use pb::ask_event::Event;
         let question = q.text;
         let tenant = self.tenant()?;
-        self.last_ask = None;
         let mut client = self.client.clone();
         let request = pb::AskRequest {
             tenant: tenant.clone(),

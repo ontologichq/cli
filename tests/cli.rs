@@ -1954,6 +1954,26 @@ fn a_logged_answer_takes_feedback_from_the_one_who_asked() {
 }
 
 #[test]
+fn a_refused_question_leaves_the_answer_before_it_unjudged() {
+    let engine = engine();
+    engine.reply(Rpc::CreateTenant, tenant("acme", 0, 0, 0));
+    engine.stream(Rpc::Ask, logged_answer("a1", &[]));
+    engine.reply(Rpc::Feedback, pb::Empty {});
+    let dir = workdir("feedback-refused-question");
+    let out = ontologic(
+        &engine,
+        &dir,
+        "\\t create acme\n\\ask who founded Lumenworks\n\\ask --facts\n\\bad wrong person\n\
+         \\ask who founded Lumenworks\n\\ask\n\\good\n",
+    );
+    let refused = "acme> error: usage: \\ask [--staged] [--facts] <question>\n\
+                   acme> error: no logged answer to give feedback on\n";
+    assert_eq!(out.matches(refused).count(), 2, "{out}");
+    assert_eq!(out.matches("kept as a1").count(), 2, "{out}");
+    assert!(calls_to(&engine, Rpc::Feedback).is_empty());
+}
+
+#[test]
 fn admins_set_how_long_a_tenant_keeps_its_question_log() {
     let engine = engine();
     engine.reply(Rpc::CreateTenant, tenant("acme", 0, 0, 0));
