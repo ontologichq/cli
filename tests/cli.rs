@@ -1883,8 +1883,11 @@ fn logged_answer(ask_id: &str, notes: &[&str]) -> Vec<Result<pb::AskEvent, Statu
     ]
 }
 
+/// Which answer feedback goes to is the CLI's to decide. Who may give it (only the user who
+/// asked; anyone else gets the NOT_FOUND an unknown id gets) is the engine's, and the engine tests
+/// it: the NOT_FOUND scripted here only shows that its refusal is printed.
 #[test]
-fn a_logged_answer_takes_feedback_from_the_one_who_asked() {
+fn feedback_goes_to_the_last_logged_answer_of_the_current_tenant() {
     let engine = engine();
     engine.reply(Rpc::CreateTenant, tenant("acme", 0, 0, 0));
     engine.reply(Rpc::GetTenant, tenant("beta", 0, 0, 0));
