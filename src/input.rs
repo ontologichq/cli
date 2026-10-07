@@ -20,6 +20,8 @@ pub enum Command<'a> {
     Import(&'a str, &'a str),
     /// `\ask [--staged] [--facts] <question>`
     Ask(Question<'a>),
+    /// `\good`, `\partly` or `\bad`, as the verdict sent (right, partly or wrong), and a note
+    Feedback(&'a str, &'a str),
     Show(&'a str),
     Commit,
     Rollback,
@@ -64,6 +66,9 @@ pub const COMMANDS: &[&str] = &[
     "\\u",
     "\\import",
     "\\ask",
+    "\\good",
+    "\\partly",
+    "\\bad",
     "\\s",
     "\\commit",
     "\\rollback",
@@ -78,7 +83,7 @@ pub const COMMANDS: &[&str] = &[
     "\\q",
 ];
 pub const TENANT_SUBCOMMANDS: &[&str] = &[
-    "create", "checkout", "get", "delete", "import", "export", "users", "meta",
+    "create", "checkout", "get", "delete", "import", "export", "users", "meta", "asklog",
 ];
 pub const USER_SUBCOMMANDS: &[&str] = &["me", "add", "grant", "remove"];
 pub const IMPORT_SUBCOMMANDS: &[&str] = &["fact", "blob"];
@@ -175,6 +180,9 @@ pub fn parse(line: &str) -> Option<Command<'_>> {
             Command::Import(sub, unquote(rest))
         }
         "\\ask" => Command::Ask(question(rest)),
+        "\\good" => Command::Feedback("right", unquote(rest)),
+        "\\partly" => Command::Feedback("partly", unquote(rest)),
+        "\\bad" => Command::Feedback("wrong", unquote(rest)),
         "\\s" => Command::Show(rest),
         "\\commit" => Command::Commit,
         "\\rollback" => Command::Rollback,
@@ -247,8 +255,8 @@ pub fn highlight_line(line: &str) -> String {
                 out.push_str(&ansi(TEXT, text));
             }
         }
-        "\\ask" | "\\s" | "\\retract" | "\\restore" | "\\erase" | "\\migrate" | "\\acl"
-        | "\\principals" => out.push_str(&ansi(TEXT, body)),
+        "\\ask" | "\\good" | "\\partly" | "\\bad" | "\\s" | "\\retract" | "\\restore"
+        | "\\erase" | "\\migrate" | "\\acl" | "\\principals" => out.push_str(&ansi(TEXT, body)),
         _ => out.push_str(body),
     }
     out
@@ -414,6 +422,8 @@ mod tests {
         assert_eq!(words("\\u g"), ["grant "]);
         assert_eq!(words("\\import "), ["fact ", "blob "]);
         assert_eq!(words("\\re"), ["\\retract ", "\\restore "]);
+        assert_eq!(words("\\p"), ["\\partly ", "\\principals "]);
+        assert_eq!(words("\\t a"), ["asklog "]);
         assert!(words("\\q ").is_empty());
     }
 
@@ -527,6 +537,28 @@ mod tests {
     }
 
     #[test]
+    fn parses_feedback_as_its_verdict_and_note() {
+        let feedback = |line| match parse(line) {
+            Some(Command::Feedback(verdict, note)) => Some((verdict, note)),
+            _ => None,
+        };
+        assert_eq!(feedback("\\good"), Some(("right", "")));
+        assert_eq!(
+            feedback("  \\partly  \"the date is wrong\" "),
+            Some(("partly", "the date is wrong"))
+        );
+        assert_eq!(
+            feedback("\\bad it names Tomas, not Maya"),
+            Some(("wrong", "it names Tomas, not Maya"))
+        );
+        assert!(feedback("\\goods").is_none());
+        assert!(matches!(
+            parse("\\t asklog 30"),
+            Some(Command::Tenant("asklog", "30"))
+        ));
+    }
+
+    #[test]
     fn parses_documents_pins_and_principals() {
         let documents = |line| match parse(line) {
             Some(Command::Documents(verb, documents)) => Some((verb, documents)),
@@ -637,6 +669,10 @@ mod tests {
         assert_eq!(
             highlight_line("\\retract d3 stale"),
             format!("{} {}", ansi(COMMAND, "\\retract"), ansi(TEXT, "d3 stale"))
+        );
+        assert_eq!(
+            highlight_line("\\bad wrong year"),
+            format!("{} {}", ansi(COMMAND, "\\bad"), ansi(TEXT, "wrong year"))
         );
         assert_eq!(highlight_line("\\as"), ansi(TYPING, "\\as"));
         assert_eq!(

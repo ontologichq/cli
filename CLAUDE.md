@@ -18,8 +18,9 @@ messages. Tests and docs use invented names (Maya Chen, Priya Raman, Tomas, Acme
   `--no-color`), connecting, and two loops: interactive (rustyline, history in
   `.ontologic_history`) and piped (stdin is not a terminal; a prompt is printed before each line).
 - `src/commands.rs`: `Cli` and what each command does (call the engine, render the reply),
-  `HELP`, the startup banner (`Me`, `Health`, `ListTenants`; a wrong key exits with 1), and the
-  session's cost.
+  `HELP`, the startup banner (`Me`, `Health`, `ListTenants`; a wrong key exits with 1), the
+  session's cost, and the last answer the engine logged (the `ask_id` on an ask's `Finished`),
+  which `\good`, `\partly` and `\bad` send `Feedback` on.
 - `src/input.rs`: a line parsed into a `Command`, colors while typing, and tab completion from
   `Names`, the tenants and ids earlier replies named, so a tab never waits on the network.
 - `src/render.rs`: how replies look: a header rule per command, a label column, one function per

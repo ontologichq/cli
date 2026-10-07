@@ -142,6 +142,7 @@ fn main() {
         session: pb::Cost::default(),
         names: Default::default(),
         pending: None,
+        last_ask: None,
     };
     say(&format!(
         "{} {}",

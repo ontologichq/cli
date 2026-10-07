@@ -611,6 +611,16 @@ pub fn finished(e: &pb::Finished) -> String {
     if let Some(t) = &e.timing {
         out.push(row("time", &[timing(t, 1)]));
     }
+    if !e.ask_id.is_empty() {
+        out.push(row(
+            "log",
+            &[format!(
+                "kept as {} {}",
+                bold(&e.ask_id),
+                dim("for feedback (\\good, \\partly, \\bad)")
+            )],
+        ));
+    }
     out.join("\n")
 }
 
@@ -786,6 +796,20 @@ fn computed(c: &pb::CountRange) -> String {
     parts.join(" ")
 }
 
+/// `\\good`, `\\partly` and `\\bad`: the verdict the engine now holds on a logged answer.
+pub fn feedback(ask_id: &str, verdict: &str, noted: bool) -> String {
+    let verdict = match verdict {
+        "right" => green(verdict),
+        "partly" => yellow(verdict),
+        _ => red(verdict),
+    };
+    let note = match noted {
+        true => ", with your note",
+        false => "",
+    };
+    format!("feedback on {}: {verdict}{note}", bold(ask_id))
+}
+
 // ---------------------------------------------------------------------------------------
 // Tenants and views
 
@@ -817,6 +841,21 @@ pub fn tenant_list(list: &pb::TenantList, current: Option<&str>) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// `\\t asklog`: how long the tenant now keeps its questions and answers.
+pub fn ask_log(tenant: &str, days: u32) -> String {
+    match days {
+        0 => format!(
+            "{} keeps no question log; what it kept is deleted",
+            bold_blue(tenant)
+        ),
+        _ => format!(
+            "{} keeps each question and its answer {} for feedback",
+            bold_blue(tenant),
+            count(days.into(), "day", "days")
+        ),
+    }
 }
 
 /// `\\t meta`: the committed tenant by kind, its files, its dates, and what it has cost.

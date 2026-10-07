@@ -54,6 +54,7 @@ members use the tenants an admin granted them.
 | `\t delete <name>` | forget a tenant and everything in it |
 | `\t users` | who can use the current tenant |
 | `\t meta [name]` | a tenant's counts, files, dates, and cost per import and question |
+| `\t asklog <days>` | admins: keep each question and its answer that many days, for feedback; `0` stops the log and deletes it |
 | `\t export <file>`, `\t import <file>` | save the tenant to a `.ttl` file, or load one into an empty tenant |
 | `\import fact <text>` | add a fact: link things, find relations, re-link older sources |
 | `\import blob <file>` | add a file: an email (`.eml`) or text, part by part |
@@ -65,6 +66,7 @@ members use the tenants an admin granted them.
 | `\principals <user> <group...>` | admins: the groups a member reads the current tenant's documents as |
 | `\ask <question>` | answer from what the tenant has committed, with probabilities |
 | `\ask --staged <q>`, `\ask --facts <q>` | include the imports not committed yet; answer from facts alone |
+| `\good [note]`, `\partly [note]`, `\bad [note]` | the last logged answer was right, partly right or wrong, and why |
 | `\s`, `\s <id>` | what the tenant knows and what it cost; everything about an entity (`e1`) or a source (`s1`) |
 | `\u me` | your user, role and tenants |
 | `\u add <user>` | admins: add a member and print their key, once |
@@ -79,6 +81,10 @@ it may be used for (`proposed`, `supported`, `accepted`, `computable` or `identi
 answer that is a number the engine computed shows its floor and its ceiling, and how far it can be
 claimed. An answer a check doubts is shown with `unsure` and why; one whose options a check dropped
 says `withheld` and why.
+
+A tenant whose admin set `\t asklog` keeps each question and its answer, and the answer ends with
+`kept as <id>`. Until the next question, `\good`, `\partly` or `\bad` tells the engine whether
+that answer was right, with a note of at most 1024 bytes if you like. Only the one who asked can.
 
 ## Develop
 

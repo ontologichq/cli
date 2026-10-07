@@ -260,6 +260,16 @@ fn the_banner_names_the_engine_its_models_and_who_signed_in() {
         &out,
         "\\q                    quit (Ctrl-D works too)\nUp and down arrows walk the history.\n",
     );
+    assert_has(
+        &out,
+        "\\t asklog <days>      admins: keep the question log <days> days; 0 stops and deletes it\n",
+    );
+    assert_has(
+        &out,
+        "\\good [note]          the last logged answer was right\n\
+         \\partly [note]        the last logged answer was partly right, and why\n\
+         \\bad [note]           the last logged answer was wrong, and why\n",
+    );
     assert_has(&out, "ontologic> ── version ──");
     assert_has(
         &out,
@@ -1848,6 +1858,147 @@ fn an_answer_says_when_a_check_doubts_it_or_withheld_it() {
     assert_has(&out, " status   unsure\n basis    cites s1\n");
     // An answer given or computed, like one from an engine before 0.3.0, has no status line.
     assert_eq!(out.matches(" status   ").count(), 3, "{out}");
+}
+
+/// An answer from Maya Chen's tenant, then the end of the question, logged under `ask_id` when
+/// it is not empty.
+fn logged_answer(ask_id: &str, notes: &[&str]) -> Vec<Result<pb::AskEvent, Status>> {
+    vec![
+        ask_event(Ask::Answer(pb::AskAnswer {
+            options: vec![pb::AnswerOption {
+                answer: "Maya Chen".into(),
+                probability: 0.9,
+                ..Default::default()
+            }],
+            something_else: 0.1,
+            exclusive: true,
+            notes: notes.iter().map(|n| n.to_string()).collect(),
+            status: "answered".into(),
+            ..Default::default()
+        })),
+        ask_event(Ask::Finished(pb::Finished {
+            ask_id: ask_id.into(),
+            ..Default::default()
+        })),
+    ]
+}
+
+#[test]
+fn a_logged_answer_takes_feedback_from_the_one_who_asked() {
+    let engine = engine();
+    engine.reply(Rpc::CreateTenant, tenant("acme", 0, 0, 0));
+    engine.reply(Rpc::GetTenant, tenant("beta", 0, 0, 0));
+    engine.reply(Rpc::GetTenant, tenant("acme", 0, 0, 0));
+    engine.reply(Rpc::Show, pb::ShowReply::default());
+    engine.stream(Rpc::Ask, logged_answer("a1", &[]));
+    let not_kept = "not kept: the question log could not be written";
+    engine.stream(Rpc::Ask, logged_answer("", &[not_kept]));
+    engine.stream(Rpc::Ask, logged_answer("a3", &[]));
+    for _ in 0..3 {
+        engine.reply(Rpc::Feedback, pb::Empty {});
+    }
+    engine.fail(Rpc::Feedback, Status::not_found("no logged answer a3"));
+    // 1,026 bytes in 513 characters: the limit counts bytes.
+    let (long, longest) = ("é".repeat(513), "é".repeat(512));
+    let dir = workdir("feedback");
+    let input = format!(
+        "\\good\n\\t create acme\n\\ask who founded Lumenworks\n\\good\n\
+         \\partly \"it left out Priya\"\n\\ask where is Lumenworks\n\\bad wrong city\n\
+         \\ask who leads Lumenworks\n\\bad {long}\n\\bad {longest}\n\\t checkout beta\n\\good\n\
+         \\t checkout acme\n\\bad again\n"
+    );
+    let out = ontologic(&engine, &dir, &input);
+    let no_answer = "error: no logged answer to give feedback on\n";
+    assert_has(&out, &format!("ontologic> {no_answer}"));
+    assert_has(
+        &out,
+        "acme>  answer   Maya Chen 90%  no evidence named\n\
+         \x20         something else 10%\n\
+         \x20log      kept as a1 for feedback (\\good, \\partly, \\bad)\nacme> ",
+    );
+    assert_has(&out, "acme> feedback on a1: right\n");
+    assert_has(&out, "acme> feedback on a1: partly, with your note\n");
+    // An answer the engine could not log says so in its notes, and nothing else is printed;
+    // feedback no longer goes to the answer before it.
+    assert_has(&out, &format!(" check    {not_kept}\n"));
+    assert_has(&out, &format!("acme> {no_answer}"));
+    assert_eq!(out.matches("kept as").count(), 2, "{out}");
+    assert_has(
+        &out,
+        "acme> error: a note is at most 1024 bytes, and this one is 1026; nothing was sent\n",
+    );
+    assert_has(&out, "acme> feedback on a3: wrong, with your note\n");
+    // The last answer was asked in another tenant, then it is the current one again.
+    assert_has(&out, &format!("beta> {no_answer}"));
+    assert_eq!(out.matches(no_answer).count(), 3, "{out}");
+    assert_has(&out, "acme> error: no logged answer a3\n");
+    let sent: Vec<pb::FeedbackRequest> = calls_to(&engine, Rpc::Feedback)
+        .iter()
+        .map(Call::request)
+        .collect();
+    let feedback = |ask_id: &str, verdict: &str, note: &str| pb::FeedbackRequest {
+        tenant: "acme".into(),
+        ask_id: ask_id.into(),
+        verdict: verdict.into(),
+        note: note.into(),
+    };
+    assert_eq!(
+        sent,
+        [
+            feedback("a1", "right", ""),
+            feedback("a1", "partly", "it left out Priya"),
+            feedback("a3", "wrong", &longest),
+            feedback("a3", "wrong", "again"),
+        ]
+    );
+}
+
+#[test]
+fn admins_set_how_long_a_tenant_keeps_its_question_log() {
+    let engine = engine();
+    engine.reply(Rpc::CreateTenant, tenant("acme", 0, 0, 0));
+    engine.reply(Rpc::SetAskLog, pb::Empty {});
+    engine.reply(Rpc::SetAskLog, pb::Empty {});
+    engine.fail(
+        Rpc::SetAskLog,
+        Status::permission_denied("only admins set a tenant's question log"),
+    );
+    let dir = workdir("ask-log");
+    let out = ontologic(
+        &engine,
+        &dir,
+        "\\t asklog 30\n\\t create acme\n\\t asklog 30\n\\t asklog 0\n\\t asklog 366\n\
+         \\t asklog soon\n\\t asklog\n\\t asklog 1\n",
+    );
+    assert_has(
+        &out,
+        "ontologic> error: no tenant: run \\t create <name> first\n",
+    );
+    assert_has(
+        &out,
+        "acme> acme keeps each question and its answer 30 days for feedback\n",
+    );
+    assert_has(
+        &out,
+        "acme> acme keeps no question log; what it kept is deleted\n",
+    );
+    let usage = "acme> error: usage: \\t asklog <days>, 0 to 365; 0 stops the log and deletes it\n";
+    assert_eq!(out.matches(usage).count(), 3, "{out}");
+    assert_has(
+        &out,
+        "acme> error: only admins set a tenant's question log\n",
+    );
+    let set: Vec<(String, u32)> = calls_to(&engine, Rpc::SetAskLog)
+        .iter()
+        .map(|c| {
+            let request: pb::AskLogRequest = c.request();
+            (request.tenant, request.keep_days)
+        })
+        .collect();
+    assert_eq!(
+        set,
+        [("acme".into(), 30), ("acme".into(), 0), ("acme".into(), 1)]
+    );
 }
 
 #[test]
