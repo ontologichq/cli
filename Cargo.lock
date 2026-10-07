@@ -784,7 +784,7 @@ dependencies = [
 [[package]]
 name = "ontologic-kit"
 version = "0.3.0"
-source = "git+https://github.com/ontologichq/kit?rev=33a9814bb6f73c511e2bf78a4c35a2282a211ae9#33a9814bb6f73c511e2bf78a4c35a2282a211ae9"
+source = "git+https://github.com/ontologichq/kit?tag=v0.3.0#9c3f5480452ad9a1b9c97744a1d67215cdd4e845"
 dependencies = [
  "prost",
  "protox",
