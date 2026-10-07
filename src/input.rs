@@ -203,14 +203,28 @@ pub fn parse(line: &str) -> Option<Command<'_>> {
     })
 }
 
-/// Whether a typed line may be written to the history file. Questions and feedback stay in the
-/// session, and so does a line that is not a command (a question typed without `\ask`, or the
-/// answer to a confirmation).
-pub fn kept_on_disk(line: &str) -> bool {
-    !matches!(
-        parse(line),
-        None | Some(Command::Ask(_) | Command::Feedback(..) | Command::Unknown(_))
-    )
+/// Whether a history entry may be written to the history file: only when every line of it is a
+/// command other than a question or feedback. A pasted entry can hold several lines, of which only
+/// the first runs, so each is read. Text that is not a command (a question typed without `\ask`,
+/// or the answer to a confirmation) stays in the session, and so does text after a command that
+/// takes none.
+pub fn kept_on_disk(entry: &str) -> bool {
+    let mut lines = entry
+        .split(['\n', '\r'])
+        .filter(|line| !line.trim().is_empty())
+        .peekable();
+    lines.peek().is_some()
+        && lines.all(|line| match parse(line) {
+            None | Some(Command::Ask(_) | Command::Feedback(..) | Command::Unknown(_)) => false,
+            Some(
+                Command::Commit
+                | Command::Rollback
+                | Command::Version
+                | Command::Help
+                | Command::Quit,
+            ) => split_word(line.trim()).1.is_empty(),
+            Some(_) => true,
+        })
 }
 
 const COMMAND: &str = "1;36";
@@ -579,10 +593,25 @@ mod tests {
             "who founded Lumenworks",
             "acme",
             " ",
+            // Pasted: only the first line runs, and every line is read.
+            "\\h\n\\ask a pasted question",
+            "\\t get\n\n\\partly it left out Priya",
+            "\\t get\r\\ask who owns Acme",
+            "\\t get\nwho owns Acme",
+            // Nothing reads what follows a command that takes nothing.
+            "\\h \\ask who owns Acme",
+            "\\commit who owns Acme",
         ] {
             assert!(!kept_on_disk(line), "{line:?}");
         }
-        for line in ["\\t create acme", "\\s e1", "\\import blob mail.eml", "\\q"] {
+        for line in [
+            "\\t create acme",
+            "\\s e1",
+            "\\import blob mail.eml",
+            "\\q ",
+            "\\h",
+            "\\t create acme\n\\t get\n",
+        ] {
             assert!(kept_on_disk(line), "{line:?}");
         }
     }
