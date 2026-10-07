@@ -436,6 +436,7 @@ impl Cli {
             question: question.to_string(),
             graph_only: q.facts,
             staged: q.staged,
+            include_set_members: false,
         };
         let mut stream = self.call(self.rt.block_on(client.ask(request)))?;
         loop {
@@ -448,6 +449,8 @@ impl Cli {
             match event {
                 Event::Index(e) => say(&render::ask_index(question, &e)),
                 Event::Answer(e) => say(&render::ask_answer(&e, q.facts)),
+                // The CLI never asks for a set's members, so an engine sends no pages.
+                Event::SetPage(e) => say(&render::set_page(&e)),
                 Event::Finished(e) => {
                     if let Some(cost) = &e.cost {
                         add_cost(&mut self.session, cost);

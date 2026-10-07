@@ -732,6 +732,25 @@ pub fn ask_answer(e: &pb::AskAnswer, facts: bool) -> String {
     out.join("\n")
 }
 
+/// `3 members of 12 · last page`: one page of a set's members, by its count alone.
+pub fn set_page(p: &pb::SetPage) -> String {
+    if !p.error.is_empty() {
+        return row("set", &[red(&format!("✗ error: {}", p.error))]);
+    }
+    let page = match p.last {
+        true => "last page",
+        false => "more pages follow",
+    };
+    row(
+        "set",
+        &[format!(
+            "{} of {} · {page}",
+            count(p.members.len() as u64, "member", "members"),
+            p.member_count
+        )],
+    )
+}
+
 /// `count 3 to 4 (bounded)`: a number the engine computed, from its floor to its ceiling (`at
 /// least` when nothing bounds it), and how far it can be claimed.
 fn computed(c: &pb::CountRange) -> String {

@@ -762,6 +762,7 @@ fn an_import_prints_each_stage_as_the_engine_sends_it() {
                     context_ms: 0,
                     total_ms: 8600,
                 }),
+                ..Default::default()
             })),
         ],
     );
@@ -929,6 +930,7 @@ fn a_blob_is_sent_by_its_file_name_and_prints_its_people_and_parts() {
                 }),
                 waiting: 0,
                 timing: None,
+                ..Default::default()
             })),
         ],
     );
@@ -1019,6 +1021,9 @@ fn a_question_prints_what_it_found_its_options_and_what_they_rest_on() {
                 notes: vec!["dropped r9, which is not in the context".into()],
                 exclusive: true,
                 count: None,
+                // An engine before 0.3.0 sends no status.
+                status: String::new(),
+                status_reason: String::new(),
             })),
             ask_event(Ask::Finished(pb::Finished {
                 cost: Some(pb::Cost {
@@ -1039,6 +1044,8 @@ fn a_question_prints_what_it_found_its_options_and_what_they_rest_on() {
                     total_ms: 2500,
                     ..Default::default()
                 }),
+                // The tenant keeps no question log.
+                ask_id: String::new(),
             })),
         ],
     );
@@ -1133,6 +1140,7 @@ fn a_question_prints_what_it_found_its_options_and_what_they_rest_on() {
         question: question.into(),
         graph_only,
         staged,
+        include_set_members: false,
     };
     assert_eq!(
         asked,
@@ -1778,6 +1786,53 @@ fn a_computed_count_shows_its_floor_and_its_ceiling() {
     );
     assert_has(&out, " computed distinct customer 8 (exact)\n");
     assert_has(&out, " computed count at least 5 (over the records held)\n");
+}
+
+#[test]
+fn a_set_page_the_cli_never_asks_for_prints_only_its_count() {
+    let engine = engine();
+    engine.reply(Rpc::CreateTenant, tenant("acme", 0, 0, 0));
+    let member = |id: &str, label: &str| pb::SetMember {
+        id: id.into(),
+        label: label.into(),
+        support: Vec::new(),
+    };
+    engine.stream(
+        Rpc::Ask,
+        vec![
+            ask_event(Ask::SetPage(pb::SetPage {
+                members: vec![member("r1", "Acme"), member("r2", "Lumenworks")],
+                member_count: 3,
+                last: false,
+                ..Default::default()
+            })),
+            ask_event(Ask::SetPage(pb::SetPage {
+                offset: 2,
+                members: vec![member("r3", "Maya Chen")],
+                member_count: 3,
+                last: true,
+                ..Default::default()
+            })),
+            ask_event(Ask::SetPage(pb::SetPage {
+                error: "the tenant changed while its members were read".into(),
+                ..Default::default()
+            })),
+        ],
+    );
+    let dir = workdir("set-page");
+    let out = ontologic(&engine, &dir, "\\t create acme\n\\ask which customers\n");
+    assert_has(
+        &out,
+        "acme>  set      2 members of 3 · more pages follow\n\
+         \x20set      1 member of 3 · last page\n\
+         \x20set      ✗ error: the tenant changed while its members were read\nacme> ",
+    );
+    assert_lacks(&out, "Lumenworks");
+    let asked: Vec<pb::AskRequest> = calls_to(&engine, Rpc::Ask)
+        .iter()
+        .map(Call::request)
+        .collect();
+    assert!(!asked[0].include_set_members);
 }
 
 #[test]
