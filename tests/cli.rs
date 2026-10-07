@@ -2002,14 +2002,17 @@ fn admins_set_how_long_a_tenant_keeps_its_question_log() {
 }
 
 /// Runs `ontologic` signed in as `USER` in `dir` with a pseudo-terminal for its stdin, as
-/// someone typing, so it keeps a history file; `input` must end with `\q`. With `TERM=dumb` the
-/// line editor reads whole lines and prints only its prompt.
+/// someone typing, so it keeps a history file. With `TERM=dumb` the line editor reads whole lines
+/// and prints only its prompt; `\x04` (Ctrl-D) at the start of a line ends the input. A CLI still
+/// running after 30 s is killed and the test fails.
 #[cfg(unix)]
-fn typed(engine: &FakeEngine, dir: &Path, input: &str) -> String {
+fn typed(engine: &FakeEngine, dir: &Path, input: &str) -> Run {
     use std::ffi::CStr;
     use std::fs::{File, OpenOptions};
+    use std::io::Read;
     use std::os::fd::FromRawFd;
     use std::os::unix::fs::OpenOptionsExt;
+    use std::time::{Duration, Instant};
 
     // SAFETY: the descriptor is checked before it is owned, and ptsname's buffer is copied
     // before any other call (no other test opens a terminal).
@@ -2032,7 +2035,9 @@ fn typed(engine: &FakeEngine, dir: &Path, input: &str) -> String {
         .open(name)
         .unwrap();
     let ca = trust(engine, dir);
-    let child = Command::new(env!("CARGO_BIN_EXE_ontologic"))
+    // The command holds this process's end of the terminal; it is dropped once spawned, so the
+    // terminal closes when the CLI ends.
+    let mut child = Command::new(env!("CARGO_BIN_EXE_ontologic"))
         .current_dir(dir)
         .args(["-h", engine.host(), "-u", USER, "-p", KEY, "--ca", &ca])
         .env("TERM", "dumb")
@@ -2042,14 +2047,47 @@ fn typed(engine: &FakeEngine, dir: &Path, input: &str) -> String {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
+    let read_all = |mut from: Box<dyn Read + Send>| {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            let _ = from.read_to_end(&mut bytes);
+            String::from_utf8_lossy(&bytes).into_owned()
+        })
+    };
+    // The terminal echoes what is typed; read it so the echo never fills the terminal's buffer.
+    let echo = read_all(Box::new(keyboard.try_clone().unwrap()));
+    let stdout = read_all(Box::new(child.stdout.take().unwrap()));
+    let stderr = read_all(Box::new(child.stderr.take().unwrap()));
     keyboard.write_all(input.as_bytes()).unwrap();
-    let output = child.wait_with_output().unwrap();
-    let (stdout, stderr) = (
-        String::from_utf8(output.stdout).unwrap(),
-        String::from_utf8(output.stderr).unwrap(),
-    );
-    assert!(output.status.success(), "{stdout}{stderr}");
-    stdout
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break Some(status);
+        }
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let (stdout, stderr) = (stdout.join().unwrap(), stderr.join().unwrap());
+    let _ = echo.join();
+    let Some(status) = status else {
+        panic!("ontologic was still running after 30 s and was killed:\n{stdout}{stderr}");
+    };
+    Run {
+        code: status.code().unwrap_or(-1),
+        stdout,
+        stderr,
+    }
+}
+
+/// The permission bits of a file.
+#[cfg(unix)]
+fn mode(path: &Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path).unwrap().permissions().mode() & 0o777
 }
 
 #[cfg(unix)]
@@ -2061,28 +2099,65 @@ fn questions_and_feedback_never_reach_the_history_file() {
     engine.reply(Rpc::Feedback, pb::Empty {});
     let dir = workdir("history");
     let history = dir.join(".ontologic_history");
-    // What an older CLI wrote, a question among its lines (backslashes are escaped).
-    std::fs::write(
-        &history,
-        "#V2\n\\\\t get\n\\\\ask who owns Lumenworks\n\\\\t users\n",
-    )
-    .unwrap();
-    let out = typed(
+    let run = typed(
         &engine,
         &dir,
         "\\t create acme\n\\ask who founded Lumenworks\n\\partly it left out Priya\n\\bad\n\
-         \\good thanks\nwho founded Acme\n\\t get\n\\q\n",
+         \\good thanks\nwho founded Acme\n\\h who owns Acme\n\\t get\n\\q\n",
     );
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
     // The lines were typed and run.
+    let out = run.stdout;
     assert_has(&out, "kept as a1 for feedback");
     assert_has(&out, "acme> feedback on a1: partly, with your note\n");
     assert_has(&out, "acme> feedback on a1: right, with your note\n");
     assert_has(&out, "acme> error: unknown command who, see \\h\n");
     assert_eq!(calls_to(&engine, Rpc::Feedback).len(), 3);
+    // Backslashes are escaped in the file.
     assert_eq!(
         std::fs::read_to_string(&history).unwrap(),
-        "#V2\n\\\\t get\n\\\\t users\n\\\\t create acme\n\\\\t get\n\\\\q\n"
+        "#V2\n\\\\t create acme\n\\\\t get\n\\\\q\n"
     );
+    assert_eq!(mode(&history), 0o600);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_history_file_an_older_cli_wrote_is_cleared_when_the_cli_starts() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // What an older CLI wrote: questions and feedback among the commands, and a pasted entry
+    // whose second line is a question (backslashes and line breaks are escaped).
+    let engine = engine();
+    let dir = workdir("history-cleared");
+    let history = dir.join(".ontologic_history");
+    std::fs::write(
+        &history,
+        "#V2\n\\\\t get\n\\\\ask who owns Lumenworks\n\\\\h\\n\\\\ask a pasted question\n\
+         \\\\t users\n\\\\bad it was Tomas\n\\\\t create acme\\n\\\\t get\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&history, std::fs::Permissions::from_mode(0o644)).unwrap();
+    // Ctrl-D before anything is typed: the start alone clears the file.
+    let run = typed(&engine, &dir, "\x04");
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(
+        std::fs::read_to_string(&history).unwrap(),
+        "#V2\n\\\\t get\n\\\\t users\n\\\\t create acme\\n\\\\t get\n"
+    );
+    assert_eq!(mode(&history), 0o600);
+
+    // A file of nothing but questions and feedback is removed.
+    let dir = workdir("history-removed");
+    let history = dir.join(".ontologic_history");
+    std::fs::write(
+        &history,
+        "#V2\n\\\\ask who owns Lumenworks\n\\\\partly it left out Priya\n\\\\q\\nwho owns Acme\n",
+    )
+    .unwrap();
+    let run = typed(&engine, &dir, "\x04");
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(!history.exists(), "{:?}", std::fs::read_to_string(&history));
 }
 
 #[test]
