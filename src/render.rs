@@ -611,6 +611,16 @@ pub fn finished(e: &pb::Finished) -> String {
     if let Some(t) = &e.timing {
         out.push(row("time", &[timing(t, 1)]));
     }
+    if !e.ask_id.is_empty() {
+        out.push(row(
+            "log",
+            &[format!(
+                "kept as {} {}",
+                bold(&e.ask_id),
+                dim("for feedback (\\good, \\partly, \\bad)")
+            )],
+        ));
+    }
     out.join("\n")
 }
 
@@ -650,8 +660,8 @@ pub fn ask_index(question: &str, e: &pb::AskIndex) -> String {
     .join("\n")
 }
 
-/// The answer, then what it rests on: `facts only (--facts)` when no source text was given, or
-/// the sources the kept options cite.
+/// The answer, whether a check doubts it or withheld it, then what it rests on: `facts only
+/// (--facts)` when no source text was given, or the sources the kept options cite.
 pub fn ask_answer(e: &pb::AskAnswer, facts: bool) -> String {
     if !e.error.is_empty() {
         return row("answer", &[red(&format!("✗ error: {}", e.error))]);
@@ -704,6 +714,9 @@ pub fn ask_answer(e: &pb::AskAnswer, facts: bool) -> String {
         ))),
     }
     let mut out = vec![row("answer", &lines)];
+    if let Some(status) = answer_status(&e.status, &e.status_reason) {
+        out.push(row("status", &[status]));
+    }
     if let Some(count) = &e.count {
         out.push(row("computed", &[computed(count)]));
     }
@@ -732,6 +745,39 @@ pub fn ask_answer(e: &pb::AskAnswer, facts: bool) -> String {
     out.join("\n")
 }
 
+/// `unsure: <why>` when a check doubts the answer shown, `withheld: <why>` when it dropped the
+/// options; nothing for an answer given or computed, or from an engine that sends no status.
+fn answer_status(status: &str, reason: &str) -> Option<String> {
+    let line = match reason.is_empty() {
+        true => status.to_string(),
+        false => format!("{status}: {reason}"),
+    };
+    match status {
+        "" | "answered" | "computed" => None,
+        "withheld" => Some(red(&line)),
+        _ => Some(yellow(&line)),
+    }
+}
+
+/// `3 members of 12 · last page`: one page of a set's members, by its count alone.
+pub fn set_page(p: &pb::SetPage) -> String {
+    if !p.error.is_empty() {
+        return row("set", &[red(&format!("✗ error: {}", p.error))]);
+    }
+    let page = match p.last {
+        true => "last page",
+        false => "more pages follow",
+    };
+    row(
+        "set",
+        &[format!(
+            "{} of {} · {page}",
+            count(p.members.len() as u64, "member", "members"),
+            p.member_count
+        )],
+    )
+}
+
 /// `count 3 to 4 (bounded)`: a number the engine computed, from its floor to its ceiling (`at
 /// least` when nothing bounds it), and how far it can be claimed.
 fn computed(c: &pb::CountRange) -> String {
@@ -748,6 +794,20 @@ fn computed(c: &pb::CountRange) -> String {
         parts.push(dim(&format!("({})", c.status)));
     }
     parts.join(" ")
+}
+
+/// `\\good`, `\\partly` and `\\bad`: the verdict the engine now holds on a logged answer.
+pub fn feedback(ask_id: &str, verdict: &str, noted: bool) -> String {
+    let verdict = match verdict {
+        "right" => green(verdict),
+        "partly" => yellow(verdict),
+        _ => red(verdict),
+    };
+    let note = match noted {
+        true => ", with your note",
+        false => "",
+    };
+    format!("feedback on {}: {verdict}{note}", bold(ask_id))
 }
 
 // ---------------------------------------------------------------------------------------
@@ -781,6 +841,21 @@ pub fn tenant_list(list: &pb::TenantList, current: Option<&str>) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// `\\t asklog`: how long the tenant now keeps its questions and answers.
+pub fn ask_log(tenant: &str, days: u32) -> String {
+    match days {
+        0 => format!(
+            "{} keeps no question log; what it kept is deleted",
+            bold_blue(tenant)
+        ),
+        _ => format!(
+            "{} keeps each question and its answer {} for feedback",
+            bold_blue(tenant),
+            count(days.into(), "day", "days")
+        ),
+    }
 }
 
 /// `\\t meta`: the committed tenant by kind, its files, its dates, and what it has cost.

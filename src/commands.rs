@@ -23,11 +23,15 @@ pub const HELP: &str = "\
 \\t import <file>      load a .ttl file into the current (empty) tenant
 \\t users              who can use the current tenant
 \\t meta [name]        a tenant's counts, files, dates, and cost per import and question
+\\t asklog <days>      admins: keep the question log <days> days; 0 stops and deletes it
 \\import fact <text>  add a fact: link things, find relations, re-link older sources
 \\import blob <file>  add a file from this directory: an email (.eml) or text, part by part
 \\ask <question>       answer from what the tenant has committed, with probabilities
 \\ask --staged <q>     answer with the imports not committed yet included
 \\ask --facts <q>      answer from facts alone, with no source text: what the graph holds
+\\good [note]          the last logged answer was right
+\\partly [note]        the last logged answer was partly right, and why
+\\bad [note]           the last logged answer was wrong, and why
 \\commit               make the staged imports part of the tenant, so questions see them
 \\rollback             drop the staged imports (and the re-links they made)
 \\retract <d> [why]    take documents (d3 ...) out of every answer, count and link
@@ -48,7 +52,13 @@ pub const HELP: &str = "\
 Up and down arrows walk the history.";
 
 const IMPORT_USAGE: &str = "usage: \\import fact <sentence> | \\import blob <file>";
-const TENANT_USAGE: &str = "usage: \\t create <name> | \\t checkout <name> | \\t get | \\t delete <name> | \\t export <file> | \\t import <file> | \\t users | \\t meta [name]";
+const TENANT_USAGE: &str = "usage: \\t create <name> | \\t checkout <name> | \\t get | \\t delete <name> | \\t export <file> | \\t import <file> | \\t users | \\t meta [name] | \\t asklog <days>";
+const ASK_LOG_USAGE: &str = "usage: \\t asklog <days>, 0 to 365; 0 stops the log and deletes it";
+/// What an engine older than kit 0.3.0 means when it answers `Feedback` or `SetAskLog` with an
+/// UNIMPLEMENTED that carries no message.
+const NO_ASK_LOG: &str = "this engine keeps no question log (it is older than kit 0.3.0)";
+/// The longest note `\\good`, `\\partly` and `\\bad` send, in bytes; the engine refuses longer.
+const NOTE_BYTES: usize = 1024;
 const USER_USAGE: &str =
     "usage: \\u me | \\u add <user> | \\u grant <user> <tenant> | \\u remove <user> <tenant>";
 
@@ -62,6 +72,9 @@ pub struct Cli {
     pub names: Rc<RefCell<input::Names>>,
     /// A command that goes ahead only if the next line says so.
     pub pending: Option<Pending>,
+    /// The tenant and id of the last answer the engine logged, what `\\good`, `\\partly` and
+    /// `\\bad` judge; each `\\ask` clears it, a refused one too.
+    pub last_ask: Option<(String, String)>,
 }
 
 /// What the next line confirms; any other line cancels it.
@@ -130,6 +143,14 @@ impl Cli {
             .map_err(|status| describe(&status, &self.host))
     }
 
+    /// `call` for `Feedback` and `SetAskLog`, which an engine older than kit 0.3.0 does not have.
+    fn call_ask_log<T>(&self, result: Result<tonic::Response<T>, Status>) -> Result<T, String> {
+        match result {
+            Err(status) if status.code() == Code::Unimplemented => Err(NO_ASK_LOG.into()),
+            result => self.call(result),
+        }
+    }
+
     /// Prints the engine, its model and who is signed in. Returns false when the user or key
     /// is wrong, which ends the CLI; an engine that cannot be reached is only reported.
     pub fn welcome(&mut self) -> bool {
@@ -188,10 +209,15 @@ impl Cli {
                 self.import_blob(file).map(|()| None)
             }
             Command::Import(..) => Err(IMPORT_USAGE.into()),
-            Command::Ask(q) if q.text.is_empty() => {
-                Err("usage: \\ask [--staged] [--facts] <question>".into())
+            Command::Ask(q) => {
+                // Any question, a refused one too, leaves the answer before it unjudged.
+                self.last_ask = None;
+                match q.text.is_empty() {
+                    true => Err("usage: \\ask [--staged] [--facts] <question>".into()),
+                    false => self.ask(&q).map(|()| None),
+                }
             }
-            Command::Ask(q) => self.ask(&q).map(|()| None),
+            Command::Feedback(verdict, note) => self.feedback(verdict, note).map(Some),
             Command::Show(id) => self.show(id).map(Some),
             Command::Commit => self.commit(true).map(Some),
             Command::Rollback => self.commit(false).map(Some),
@@ -264,6 +290,20 @@ impl Cli {
                 };
                 let meta = self.call(self.rt.block_on(client.tenant_meta(named(&name)?)))?;
                 Ok(render::meta(&meta))
+            }
+            "asklog" => {
+                let days = arg
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|days| *days <= 365)
+                    .ok_or_else(|| ASK_LOG_USAGE.to_string())?;
+                let tenant = self.tenant()?;
+                let request = pb::AskLogRequest {
+                    tenant: tenant.clone(),
+                    keep_days: days,
+                };
+                self.call_ask_log(self.rt.block_on(client.set_ask_log(request)))?;
+                Ok(render::ask_log(&tenant, days))
             }
             "delete" => {
                 let t = self.call(self.rt.block_on(client.delete_tenant(named(arg)?)))?;
@@ -432,10 +472,11 @@ impl Cli {
         let tenant = self.tenant()?;
         let mut client = self.client.clone();
         let request = pb::AskRequest {
-            tenant,
+            tenant: tenant.clone(),
             question: question.to_string(),
             graph_only: q.facts,
             staged: q.staged,
+            include_set_members: false,
         };
         let mut stream = self.call(self.rt.block_on(client.ask(request)))?;
         loop {
@@ -448,14 +489,46 @@ impl Cli {
             match event {
                 Event::Index(e) => say(&render::ask_index(question, &e)),
                 Event::Answer(e) => say(&render::ask_answer(&e, q.facts)),
+                // The CLI never asks for a set's members, so an engine sends no pages.
+                Event::SetPage(e) => say(&render::set_page(&e)),
                 Event::Finished(e) => {
                     if let Some(cost) = &e.cost {
                         add_cost(&mut self.session, cost);
+                    }
+                    if !e.ask_id.is_empty() {
+                        self.last_ask = Some((tenant.clone(), e.ask_id.clone()));
                     }
                     say(&render::finished(&pb::Finished { waiting: 0, ..e }));
                 }
             }
         }
+    }
+
+    /// `\\good`, `\\partly` and `\\bad`: whether the last answer the engine logged in this
+    /// tenant was right, with a note on why.
+    fn feedback(&mut self, verdict: &str, note: &str) -> Result<String, String> {
+        let Some((tenant, ask_id)) = self
+            .last_ask
+            .clone()
+            .filter(|(tenant, _)| self.current.as_ref() == Some(tenant))
+        else {
+            return Err("no logged answer to give feedback on".into());
+        };
+        if note.len() > NOTE_BYTES {
+            return Err(format!(
+                "a note is at most {NOTE_BYTES} bytes, and this one is {}; nothing was sent",
+                note.len()
+            ));
+        }
+        let request = pb::FeedbackRequest {
+            tenant,
+            ask_id: ask_id.clone(),
+            verdict: verdict.to_string(),
+            note: note.to_string(),
+        };
+        let mut client = self.client.clone();
+        self.call_ask_log(self.rt.block_on(client.feedback(request)))?;
+        Ok(render::feedback(&ask_id, verdict, !note.is_empty()))
     }
 
     fn user_command(&mut self, sub: &str, rest: &str) -> Result<String, String> {

@@ -40,7 +40,9 @@ printf '\\t checkout acme\n\\ask who founded Lumenworks\n' | ontologic -h engine
 ```
 
 Typed commands keep a history in `.ontologic_history` in the current directory, and tab completes
-commands, tenant names, ids and file names.
+commands, tenant names, ids and file names. Questions, feedback and lines that are not commands are
+never written there: the up arrow finds them until the CLI ends, and a question an older CLI wrote
+to the file is dropped from it (when the file cannot be rewritten, the CLI warns and names it).
 
 ## Commands
 
@@ -54,6 +56,7 @@ members use the tenants an admin granted them.
 | `\t delete <name>` | forget a tenant and everything in it |
 | `\t users` | who can use the current tenant |
 | `\t meta [name]` | a tenant's counts, files, dates, and cost per import and question |
+| `\t asklog <days>` | admins: keep each question and its answer that many days, for feedback; `0` stops the log and deletes it |
 | `\t export <file>`, `\t import <file>` | save the tenant to a `.ttl` file, or load one into an empty tenant |
 | `\import fact <text>` | add a fact: link things, find relations, re-link older sources |
 | `\import blob <file>` | add a file: an email (`.eml`) or text, part by part |
@@ -65,6 +68,7 @@ members use the tenants an admin granted them.
 | `\principals <user> <group...>` | admins: the groups a member reads the current tenant's documents as |
 | `\ask <question>` | answer from what the tenant has committed, with probabilities |
 | `\ask --staged <q>`, `\ask --facts <q>` | include the imports not committed yet; answer from facts alone |
+| `\good [note]`, `\partly [note]`, `\bad [note]` | the last logged answer was right, partly right or wrong, and why |
 | `\s`, `\s <id>` | what the tenant knows and what it cost; everything about an entity (`e1`) or a source (`s1`) |
 | `\u me` | your user, role and tenants |
 | `\u add <user>` | admins: add a member and print their key, once |
@@ -77,7 +81,13 @@ File names in commands are relative to the directory the CLI runs from.
 A fact shows how sure the engine is of it and, from an engine that ranks its facts, its rung: what
 it may be used for (`proposed`, `supported`, `accepted`, `computable` or `identity-trusted`). An
 answer that is a number the engine computed shows its floor and its ceiling, and how far it can be
-claimed.
+claimed. An answer a check doubts is shown with `unsure` and why; one whose options a check dropped
+says `withheld` and why.
+
+A tenant whose admin set `\t asklog` keeps each question and its answer, and the answer ends with
+`kept as <id>`. Until the next question, `\good`, `\partly` or `\bad` tells the engine whether
+that answer was right, with a note of at most 1024 bytes if you like. Only the one who asked can.
+An engine older than kit 0.3.0 keeps no question log, and the CLI says so.
 
 ## Develop
 

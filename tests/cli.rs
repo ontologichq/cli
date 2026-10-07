@@ -260,6 +260,16 @@ fn the_banner_names_the_engine_its_models_and_who_signed_in() {
         &out,
         "\\q                    quit (Ctrl-D works too)\nUp and down arrows walk the history.\n",
     );
+    assert_has(
+        &out,
+        "\\t asklog <days>      admins: keep the question log <days> days; 0 stops and deletes it\n",
+    );
+    assert_has(
+        &out,
+        "\\good [note]          the last logged answer was right\n\
+         \\partly [note]        the last logged answer was partly right, and why\n\
+         \\bad [note]           the last logged answer was wrong, and why\n",
+    );
     assert_has(&out, "ontologic> ── version ──");
     assert_has(
         &out,
@@ -762,6 +772,7 @@ fn an_import_prints_each_stage_as_the_engine_sends_it() {
                     context_ms: 0,
                     total_ms: 8600,
                 }),
+                ..Default::default()
             })),
         ],
     );
@@ -929,6 +940,7 @@ fn a_blob_is_sent_by_its_file_name_and_prints_its_people_and_parts() {
                 }),
                 waiting: 0,
                 timing: None,
+                ..Default::default()
             })),
         ],
     );
@@ -1019,6 +1031,9 @@ fn a_question_prints_what_it_found_its_options_and_what_they_rest_on() {
                 notes: vec!["dropped r9, which is not in the context".into()],
                 exclusive: true,
                 count: None,
+                // An engine before 0.3.0 sends no status.
+                status: String::new(),
+                status_reason: String::new(),
             })),
             ask_event(Ask::Finished(pb::Finished {
                 cost: Some(pb::Cost {
@@ -1039,6 +1054,8 @@ fn a_question_prints_what_it_found_its_options_and_what_they_rest_on() {
                     total_ms: 2500,
                     ..Default::default()
                 }),
+                // The tenant keeps no question log.
+                ask_id: String::new(),
             })),
         ],
     );
@@ -1133,6 +1150,7 @@ fn a_question_prints_what_it_found_its_options_and_what_they_rest_on() {
         question: question.into(),
         graph_only,
         staged,
+        include_set_members: false,
     };
     assert_eq!(
         asked,
@@ -1778,6 +1796,515 @@ fn a_computed_count_shows_its_floor_and_its_ceiling() {
     );
     assert_has(&out, " computed distinct customer 8 (exact)\n");
     assert_has(&out, " computed count at least 5 (over the records held)\n");
+}
+
+#[test]
+fn an_answer_says_when_a_check_doubts_it_or_withheld_it() {
+    let engine = engine();
+    engine.reply(Rpc::CreateTenant, tenant("acme", 0, 0, 0));
+    let answered = |status: &str, reason: &str, options: Vec<pb::AnswerOption>| {
+        vec![ask_event(Ask::Answer(pb::AskAnswer {
+            something_else: 1.0 - options.iter().map(|o| o.probability).sum::<f32>(),
+            options,
+            exclusive: true,
+            status: status.into(),
+            status_reason: reason.into(),
+            ..Default::default()
+        }))]
+    };
+    let maya = || {
+        vec![pb::AnswerOption {
+            answer: "Maya Chen".into(),
+            entity_id: "e1".into(),
+            probability: 0.75,
+            based_on: vec![cite("s1", "Maya founded Lumenworks.", None)],
+            ..Default::default()
+        }]
+    };
+    engine.stream(
+        Rpc::Ask,
+        answered("unsure", "no source it was shown names a founder", maya()),
+    );
+    engine.stream(
+        Rpc::Ask,
+        answered(
+            "withheld",
+            "the answer cites no source it was shown",
+            Vec::new(),
+        ),
+    );
+    engine.stream(Rpc::Ask, answered("unsure", "", maya()));
+    engine.stream(Rpc::Ask, answered("answered", "", maya()));
+    engine.stream(Rpc::Ask, answered("computed", "", maya()));
+    let dir = workdir("status");
+    let out = ontologic(
+        &engine,
+        &dir,
+        "\\t create acme\n\\ask who founded Lumenworks\n\\ask who founded Acme\n\
+         \\ask who leads Lumenworks\n\\ask who started Lumenworks\n\\ask how many founders\n",
+    );
+    assert_has(
+        &out,
+        "acme>  answer   Maya Chen (e1) 75%  from s1\n\
+         \x20         something else 25%\n\
+         \x20status   unsure: no source it was shown names a founder\n\
+         \x20basis    cites s1\nacme> ",
+    );
+    assert_has(
+        &out,
+        "acme>  answer   I don't know (something else 100%)\n\
+         \x20status   withheld: the answer cites no source it was shown\nacme> ",
+    );
+    assert_has(&out, " status   unsure\n basis    cites s1\n");
+    // An answer given or computed, like one from an engine before 0.3.0, has no status line.
+    assert_eq!(out.matches(" status   ").count(), 3, "{out}");
+}
+
+/// An answer from Maya Chen's tenant, then the end of the question, logged under `ask_id` when
+/// it is not empty.
+fn logged_answer(ask_id: &str, notes: &[&str]) -> Vec<Result<pb::AskEvent, Status>> {
+    vec![
+        ask_event(Ask::Answer(pb::AskAnswer {
+            options: vec![pb::AnswerOption {
+                answer: "Maya Chen".into(),
+                probability: 0.9,
+                ..Default::default()
+            }],
+            something_else: 0.1,
+            exclusive: true,
+            notes: notes.iter().map(|n| n.to_string()).collect(),
+            status: "answered".into(),
+            ..Default::default()
+        })),
+        ask_event(Ask::Finished(pb::Finished {
+            ask_id: ask_id.into(),
+            ..Default::default()
+        })),
+    ]
+}
+
+/// Which answer feedback goes to is the CLI's to decide. Who may give it (only the user who
+/// asked; anyone else gets the NOT_FOUND an unknown id gets) is the engine's, and the engine tests
+/// it: the NOT_FOUND scripted here only shows that its refusal is printed.
+#[test]
+fn feedback_goes_to_the_last_logged_answer_of_the_current_tenant() {
+    let engine = engine();
+    engine.reply(Rpc::CreateTenant, tenant("acme", 0, 0, 0));
+    engine.reply(Rpc::GetTenant, tenant("beta", 0, 0, 0));
+    engine.reply(Rpc::GetTenant, tenant("acme", 0, 0, 0));
+    engine.reply(Rpc::Show, pb::ShowReply::default());
+    engine.stream(Rpc::Ask, logged_answer("a1", &[]));
+    let not_kept = "not kept: the question log could not be written";
+    engine.stream(Rpc::Ask, logged_answer("", &[not_kept]));
+    engine.stream(Rpc::Ask, logged_answer("a3", &[]));
+    for _ in 0..3 {
+        engine.reply(Rpc::Feedback, pb::Empty {});
+    }
+    engine.fail(Rpc::Feedback, Status::not_found("no logged answer a3"));
+    // 1,026 bytes in 513 characters: the limit counts bytes.
+    let (long, longest) = ("é".repeat(513), "é".repeat(512));
+    let dir = workdir("feedback");
+    let input = format!(
+        "\\good\n\\t create acme\n\\ask who founded Lumenworks\n\\good\n\
+         \\partly \"it left out Priya\"\n\\ask where is Lumenworks\n\\bad wrong city\n\
+         \\ask who leads Lumenworks\n\\bad {long}\n\\bad {longest}\n\\t checkout beta\n\\good\n\
+         \\t checkout acme\n\\bad again\n"
+    );
+    let out = ontologic(&engine, &dir, &input);
+    let no_answer = "error: no logged answer to give feedback on\n";
+    assert_has(&out, &format!("ontologic> {no_answer}"));
+    assert_has(
+        &out,
+        "acme>  answer   Maya Chen 90%  no evidence named\n\
+         \x20         something else 10%\n\
+         \x20log      kept as a1 for feedback (\\good, \\partly, \\bad)\nacme> ",
+    );
+    assert_has(&out, "acme> feedback on a1: right\n");
+    assert_has(&out, "acme> feedback on a1: partly, with your note\n");
+    // An answer the engine could not log says so in its notes, and nothing else is printed;
+    // feedback no longer goes to the answer before it.
+    assert_has(&out, &format!(" check    {not_kept}\n"));
+    assert_has(&out, &format!("acme> {no_answer}"));
+    assert_eq!(out.matches("kept as").count(), 2, "{out}");
+    assert_has(
+        &out,
+        "acme> error: a note is at most 1024 bytes, and this one is 1026; nothing was sent\n",
+    );
+    assert_has(&out, "acme> feedback on a3: wrong, with your note\n");
+    // The last answer was asked in another tenant, then it is the current one again.
+    assert_has(&out, &format!("beta> {no_answer}"));
+    assert_eq!(out.matches(no_answer).count(), 3, "{out}");
+    assert_has(&out, "acme> error: no logged answer a3\n");
+    let sent: Vec<pb::FeedbackRequest> = calls_to(&engine, Rpc::Feedback)
+        .iter()
+        .map(Call::request)
+        .collect();
+    let feedback = |ask_id: &str, verdict: &str, note: &str| pb::FeedbackRequest {
+        tenant: "acme".into(),
+        ask_id: ask_id.into(),
+        verdict: verdict.into(),
+        note: note.into(),
+    };
+    assert_eq!(
+        sent,
+        [
+            feedback("a1", "right", ""),
+            feedback("a1", "partly", "it left out Priya"),
+            feedback("a3", "wrong", &longest),
+            feedback("a3", "wrong", "again"),
+        ]
+    );
+}
+
+#[test]
+fn a_refused_question_leaves_the_answer_before_it_unjudged() {
+    let engine = engine();
+    engine.reply(Rpc::CreateTenant, tenant("acme", 0, 0, 0));
+    engine.stream(Rpc::Ask, logged_answer("a1", &[]));
+    engine.reply(Rpc::Feedback, pb::Empty {});
+    let dir = workdir("feedback-refused-question");
+    let out = ontologic(
+        &engine,
+        &dir,
+        "\\t create acme\n\\ask who founded Lumenworks\n\\ask --facts\n\\bad wrong person\n\
+         \\ask who founded Lumenworks\n\\ask\n\\good\n",
+    );
+    let refused = "acme> error: usage: \\ask [--staged] [--facts] <question>\n\
+                   acme> error: no logged answer to give feedback on\n";
+    assert_eq!(out.matches(refused).count(), 2, "{out}");
+    assert_eq!(out.matches("kept as a1").count(), 2, "{out}");
+    assert!(calls_to(&engine, Rpc::Feedback).is_empty());
+}
+
+#[test]
+fn an_engine_older_than_the_question_log_says_it_keeps_none() {
+    let engine = engine();
+    engine.reply(Rpc::CreateTenant, tenant("acme", 0, 0, 0));
+    engine.stream(Rpc::Ask, logged_answer("a1", &[]));
+    // What an engine without the calls answers: no message.
+    engine.fail(Rpc::Feedback, Status::unimplemented(""));
+    engine.fail(Rpc::SetAskLog, Status::unimplemented(""));
+    let dir = workdir("ask-log-older-engine");
+    let out = ontologic(
+        &engine,
+        &dir,
+        "\\t create acme\n\\ask who founded Lumenworks\n\\bad wrong person\n\\t asklog 30\n",
+    );
+    let older = "acme> error: this engine keeps no question log (it is older than kit 0.3.0)\n";
+    assert_eq!(out.matches(older).count(), 2, "{out}");
+    assert_eq!(calls_to(&engine, Rpc::Feedback).len(), 1);
+    assert_eq!(calls_to(&engine, Rpc::SetAskLog).len(), 1);
+}
+
+#[test]
+fn admins_set_how_long_a_tenant_keeps_its_question_log() {
+    let engine = engine();
+    engine.reply(Rpc::CreateTenant, tenant("acme", 0, 0, 0));
+    engine.reply(Rpc::SetAskLog, pb::Empty {});
+    engine.reply(Rpc::SetAskLog, pb::Empty {});
+    engine.fail(
+        Rpc::SetAskLog,
+        Status::permission_denied("only admins set a tenant's question log"),
+    );
+    let dir = workdir("ask-log");
+    let out = ontologic(
+        &engine,
+        &dir,
+        "\\t asklog 30\n\\t create acme\n\\t asklog 30\n\\t asklog 0\n\\t asklog 366\n\
+         \\t asklog soon\n\\t asklog\n\\t asklog 1\n",
+    );
+    assert_has(
+        &out,
+        "ontologic> error: no tenant: run \\t create <name> first\n",
+    );
+    assert_has(
+        &out,
+        "acme> acme keeps each question and its answer 30 days for feedback\n",
+    );
+    assert_has(
+        &out,
+        "acme> acme keeps no question log; what it kept is deleted\n",
+    );
+    let usage = "acme> error: usage: \\t asklog <days>, 0 to 365; 0 stops the log and deletes it\n";
+    assert_eq!(out.matches(usage).count(), 3, "{out}");
+    assert_has(
+        &out,
+        "acme> error: only admins set a tenant's question log\n",
+    );
+    let set: Vec<(String, u32)> = calls_to(&engine, Rpc::SetAskLog)
+        .iter()
+        .map(|c| {
+            let request: pb::AskLogRequest = c.request();
+            (request.tenant, request.keep_days)
+        })
+        .collect();
+    assert_eq!(
+        set,
+        [("acme".into(), 30), ("acme".into(), 0), ("acme".into(), 1)]
+    );
+}
+
+/// Runs `ontologic` signed in as `USER` in `dir` with a pseudo-terminal for its stdin, as
+/// someone typing, so it keeps a history file. With `TERM=dumb` the line editor reads whole lines
+/// and prints only its prompt; `\x04` (Ctrl-D) at the start of a line ends the input. Typing,
+/// reading the terminal's echo and waiting for the CLI never block: a CLI still running after
+/// 30 s is killed and the test fails.
+#[cfg(unix)]
+fn typed(engine: &FakeEngine, dir: &Path, input: &str) -> Run {
+    use std::ffi::CStr;
+    use std::fs::{File, OpenOptions};
+    use std::io::{ErrorKind, Read};
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+
+    /// ptsname answers in one buffer for the whole process, and tests run at once.
+    static PTSNAME: Mutex<()> = Mutex::new(());
+    // SAFETY: the descriptor is checked before it is owned, and ptsname's buffer is copied while
+    // no other thread can call it.
+    let (mut keyboard, name) = unsafe {
+        let fd = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY | libc::O_NONBLOCK);
+        assert!(fd >= 0, "{}", std::io::Error::last_os_error());
+        let keyboard = File::from_raw_fd(fd);
+        assert_eq!(libc::grantpt(fd), 0);
+        assert_eq!(libc::unlockpt(fd), 0);
+        let _only = PTSNAME
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let name = CStr::from_ptr(libc::ptsname(fd))
+            .to_str()
+            .unwrap()
+            .to_string();
+        (keyboard, name)
+    };
+    // Some systems ignore O_NONBLOCK on posix_openpt; set it again.
+    // SAFETY: fcntl on a descriptor `keyboard` owns.
+    unsafe {
+        let fd = keyboard.as_raw_fd();
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        assert!(flags >= 0, "{}", std::io::Error::last_os_error());
+        assert_eq!(libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK), 0);
+    }
+    let terminal = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NOCTTY)
+        .open(name)
+        .unwrap();
+    let ca = trust(engine, dir);
+    // The command holds this process's end of the terminal; it is dropped once spawned, so the
+    // terminal closes when the CLI ends.
+    let mut child = Command::new(env!("CARGO_BIN_EXE_ontologic"))
+        .current_dir(dir)
+        .args(["-h", engine.host(), "-u", USER, "-p", KEY, "--ca", &ca])
+        .env("TERM", "dumb")
+        .env("NO_COLOR", "1")
+        .stdin(terminal)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let read_all = |mut from: Box<dyn Read + Send>| {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            let _ = from.read_to_end(&mut bytes);
+            String::from_utf8_lossy(&bytes).into_owned()
+        })
+    };
+    let stdout = read_all(Box::new(child.stdout.take().unwrap()));
+    let stderr = read_all(Box::new(child.stderr.take().unwrap()));
+    let mut typing = input.as_bytes();
+    let mut echo = [0u8; 4096];
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let status = loop {
+        // Type what the terminal takes now, and read its echo so the echo never fills it.
+        while !typing.is_empty() {
+            match keyboard.write(typing) {
+                Ok(n) => typing = &typing[n..],
+                Err(e) if e.kind() == ErrorKind::WouldBlock => break,
+                // The CLI is gone and its terminal with it.
+                Err(_) => typing = &[],
+            }
+        }
+        while matches!(keyboard.read(&mut echo), Ok(n) if n > 0) {}
+        if let Some(status) = child.try_wait().unwrap() {
+            break Some(status);
+        }
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    // The CLI has ended, so its stdout and stderr are closed and these end.
+    let (stdout, stderr) = (stdout.join().unwrap(), stderr.join().unwrap());
+    let Some(status) = status else {
+        panic!("ontologic was still running after 30 s and was killed:\n{stdout}{stderr}");
+    };
+    Run {
+        code: status.code().unwrap_or(-1),
+        stdout,
+        stderr,
+    }
+}
+
+/// The permission bits of a file.
+#[cfg(unix)]
+fn mode(path: &Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+}
+
+#[cfg(unix)]
+#[test]
+fn questions_and_feedback_never_reach_the_history_file() {
+    let engine = engine();
+    engine.reply(Rpc::CreateTenant, tenant("acme", 0, 0, 0));
+    engine.stream(Rpc::Ask, logged_answer("a1", &[]));
+    engine.reply(Rpc::Feedback, pb::Empty {});
+    let dir = workdir("history");
+    let history = dir.join(".ontologic_history");
+    let run = typed(
+        &engine,
+        &dir,
+        "\\t create acme\n\\ask who founded Lumenworks\n\\partly it left out Priya\n\\bad\n\
+         \\good thanks\nwho founded Acme\n\\h who owns Acme\n\\t get\n\\q\n",
+    );
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    // The lines were typed and run.
+    let out = run.stdout;
+    assert_has(&out, "kept as a1 for feedback");
+    assert_has(&out, "acme> feedback on a1: partly, with your note\n");
+    assert_has(&out, "acme> feedback on a1: right, with your note\n");
+    assert_has(&out, "acme> error: unknown command who, see \\h\n");
+    assert_eq!(calls_to(&engine, Rpc::Feedback).len(), 3);
+    // Backslashes are escaped in the file.
+    assert_eq!(
+        std::fs::read_to_string(&history).unwrap(),
+        "#V2\n\\\\t create acme\n\\\\t get\n\\\\q\n"
+    );
+    assert_eq!(mode(&history), 0o600);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_history_file_an_older_cli_wrote_is_cleared_when_the_cli_starts() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // What an older CLI wrote: questions and feedback among the commands, and a pasted entry
+    // whose second line is a question (backslashes and line breaks are escaped).
+    let engine = engine();
+    let dir = workdir("history-cleared");
+    let history = dir.join(".ontologic_history");
+    std::fs::write(
+        &history,
+        "#V2\n\\\\t get\n\\\\ask who owns Lumenworks\n\\\\h\\n\\\\ask a pasted question\n\
+         \\\\t users\n\\\\bad it was Tomas\n\\\\t create acme\\n\\\\t get\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&history, std::fs::Permissions::from_mode(0o644)).unwrap();
+    // Ctrl-D before anything is typed: the start alone clears the file.
+    let run = typed(&engine, &dir, "\x04");
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(
+        std::fs::read_to_string(&history).unwrap(),
+        "#V2\n\\\\t get\n\\\\t users\n\\\\t create acme\\n\\\\t get\n"
+    );
+    assert_eq!(mode(&history), 0o600);
+
+    // A file of nothing but questions and feedback is removed.
+    let dir = workdir("history-removed");
+    let history = dir.join(".ontologic_history");
+    std::fs::write(
+        &history,
+        "#V2\n\\\\ask who owns Lumenworks\n\\\\partly it left out Priya\n\\\\q\\nwho owns Acme\n",
+    )
+    .unwrap();
+    let run = typed(&engine, &dir, "\x04");
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(!history.exists(), "{:?}", std::fs::read_to_string(&history));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_history_file_that_cannot_be_cleared_says_where_it_is() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // SAFETY: geteuid only reads the process's user id.
+    if unsafe { libc::geteuid() } == 0 {
+        eprintln!("skipped: root writes a read-only file");
+        return;
+    }
+    let engine = engine();
+    let dir = workdir("history-read-only");
+    let history = dir.join(".ontologic_history");
+    let older = "#V2\n\\\\t get\n\\\\ask who owns Lumenworks\n";
+    std::fs::write(&history, older).unwrap();
+    std::fs::set_permissions(&history, std::fs::Permissions::from_mode(0o400)).unwrap();
+    let run = typed(&engine, &dir, "\x04");
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_has(
+        &run.stderr,
+        &format!(
+            "warning: {} still holds questions or feedback an older CLI wrote, and they could not \
+             be removed (",
+            dir.canonicalize()
+                .unwrap()
+                .join(".ontologic_history")
+                .display()
+        ),
+    );
+    assert_has(&run.stderr, "); delete the file\n");
+    assert_eq!(std::fs::read_to_string(&history).unwrap(), older);
+}
+
+#[test]
+fn a_set_page_the_cli_never_asks_for_prints_only_its_count() {
+    let engine = engine();
+    engine.reply(Rpc::CreateTenant, tenant("acme", 0, 0, 0));
+    let member = |id: &str, label: &str| pb::SetMember {
+        id: id.into(),
+        label: label.into(),
+        support: Vec::new(),
+    };
+    engine.stream(
+        Rpc::Ask,
+        vec![
+            ask_event(Ask::SetPage(pb::SetPage {
+                members: vec![member("r1", "Acme"), member("r2", "Lumenworks")],
+                member_count: 3,
+                last: false,
+                ..Default::default()
+            })),
+            ask_event(Ask::SetPage(pb::SetPage {
+                offset: 2,
+                members: vec![member("r3", "Maya Chen")],
+                member_count: 3,
+                last: true,
+                ..Default::default()
+            })),
+            ask_event(Ask::SetPage(pb::SetPage {
+                error: "the tenant changed while its members were read".into(),
+                ..Default::default()
+            })),
+        ],
+    );
+    let dir = workdir("set-page");
+    let out = ontologic(&engine, &dir, "\\t create acme\n\\ask which customers\n");
+    assert_has(
+        &out,
+        "acme>  set      2 members of 3 · more pages follow\n\
+         \x20set      1 member of 3 · last page\n\
+         \x20set      ✗ error: the tenant changed while its members were read\nacme> ",
+    );
+    assert_lacks(&out, "Lumenworks");
+    let asked: Vec<pb::AskRequest> = calls_to(&engine, Rpc::Ask)
+        .iter()
+        .map(Call::request)
+        .collect();
+    assert!(!asked[0].include_set_members);
 }
 
 #[test]

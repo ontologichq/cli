@@ -12,13 +12,17 @@ name = "ontologic"
 path = "src/main.rs"
 
 [dependencies]
-# Pinned by tag. To work on kit alongside, patch it to a local checkout in a gitignored
-# .cargo/config.toml (see README).
-ontologic-kit = { git = "https://github.com/ontologichq/kit", tag = "v0.2.1", features = ["client"] }
+# Pinned by tag: kit v0.3.0. To work on kit alongside, patch
+# it to a local checkout in a gitignored .cargo/config.toml (see README).
+ontologic-kit = { git = "https://github.com/ontologichq/kit", tag = "v0.3.0", features = ["client"] }
 rustyline = { version = "18", features = ["buffer-redux", "derive"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 tonic = { version = "0.14", features = ["tls-ring", "tls-webpki-roots"] }
 
 [dev-dependencies]
 # The same kit with its fake engine, which tests/cli.rs runs the binary against.
-ontologic-kit = { git = "https://github.com/ontologichq/kit", tag = "v0.2.1", features = ["fake"] }
+ontologic-kit = { git = "https://github.com/ontologichq/kit", tag = "v0.3.0", features = ["fake"] }
+
+[target.'cfg(unix)'.dev-dependencies]
+# A pseudo-terminal, so a test types into the CLI as a person does and sees its history file.
+libc = "0.2"

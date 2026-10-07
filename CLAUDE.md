@@ -16,10 +16,13 @@ messages. Tests and docs use invented names (Maya Chen, Priya Raman, Tomas, Acme
 
 - `src/main.rs`: flags (`-h`, `-u` or `ONTOLOGIC_USER`, `-p` or `ONTOLOGIC_KEY`, `--ca`,
   `--no-color`), connecting, and two loops: interactive (rustyline, history in
-  `.ontologic_history`) and piped (stdin is not a terminal; a prompt is printed before each line).
+  `.ontologic_history`, which never gets a line `input::kept_on_disk` refuses: questions, feedback
+  and lines that are not commands) and piped (stdin is not a terminal; a prompt is printed before
+  each line).
 - `src/commands.rs`: `Cli` and what each command does (call the engine, render the reply),
-  `HELP`, the startup banner (`Me`, `Health`, `ListTenants`; a wrong key exits with 1), and the
-  session's cost.
+  `HELP`, the startup banner (`Me`, `Health`, `ListTenants`; a wrong key exits with 1), the
+  session's cost, and the last answer the engine logged (the `ask_id` on an ask's `Finished`),
+  which `\good`, `\partly` and `\bad` send `Feedback` on.
 - `src/input.rs`: a line parsed into a `Command`, colors while typing, and tab completion from
   `Names`, the tenants and ids earlier replies named, so a tab never waits on the network.
 - `src/render.rs`: how replies look: a header rule per command, a label column, one function per
@@ -30,7 +33,8 @@ messages. Tests and docs use invented names (Maya Chen, Priya Raman, Tomas, Acme
   which `\v` prints. Setting it in the environment names the commit of a copy without `.git`.
 
 The API (`ontologic_kit::pb`), the client (`connect`, `SignIn`, `describe`, `TRUST_DIR`) and the
-fake engine come from [kit](https://github.com/ontologichq/kit), pinned by tag in Cargo.toml. To
+fake engine come from [kit](https://github.com/ontologichq/kit), pinned in Cargo.toml by tag (now
+v0.3.0). To
 change kit and the CLI together, patch it to a sibling checkout in a gitignored
 `.cargo/config.toml` (`[patch."https://github.com/ontologichq/kit"] ontologic-kit = { path =
 "../kit" }`), and bump the tag once kit is released. Code a second repository needs moves into kit.
@@ -44,7 +48,9 @@ change kit and the CLI together, patch it to a sibling checkout in a gitignored
   commands in with `-h <fake host> -u <user> -p <key> --ca <its certificate>` from a fresh
   directory under `target/tmp`, asserts on substrings of what the CLI printed (stdout is a pipe,
   so no colors), and checks what the engine got with `calls()`. At startup the CLI calls `Me`,
-  `Health` and `ListTenants`, which take the first scripted reply of each.
+  `Health` and `ListTenants`, which take the first scripted reply of each. On unix, `typed` gives
+  the CLI a pseudo-terminal for stdin instead (`TERM=dumb`), so it runs its interactive loop and
+  writes its history file.
 - What the CLI prints is its interface: a change to the rendering changes the expected text in
   `tests/cli.rs` in the same commit.
 
