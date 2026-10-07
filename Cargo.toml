@@ -22,3 +22,7 @@ tonic = { version = "0.14", features = ["tls-ring", "tls-webpki-roots"] }
 [dev-dependencies]
 # The same kit with its fake engine, which tests/cli.rs runs the binary against.
 ontologic-kit = { git = "https://github.com/ontologichq/kit", rev = "c00e956254d2c32b133b2ce0b5d42ad5bacdb4e7", features = ["fake"] }
+
+[target.'cfg(unix)'.dev-dependencies]
+# A pseudo-terminal, so a test types into the CLI as a person does and sees its history file.
+libc = "0.2"

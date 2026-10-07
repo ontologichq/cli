@@ -2001,6 +2001,90 @@ fn admins_set_how_long_a_tenant_keeps_its_question_log() {
     );
 }
 
+/// Runs `ontologic` signed in as `USER` in `dir` with a pseudo-terminal for its stdin, as
+/// someone typing, so it keeps a history file; `input` must end with `\q`. With `TERM=dumb` the
+/// line editor reads whole lines and prints only its prompt.
+#[cfg(unix)]
+fn typed(engine: &FakeEngine, dir: &Path, input: &str) -> String {
+    use std::ffi::CStr;
+    use std::fs::{File, OpenOptions};
+    use std::os::fd::FromRawFd;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    // SAFETY: the descriptor is checked before it is owned, and ptsname's buffer is copied
+    // before any other call (no other test opens a terminal).
+    let (mut keyboard, name) = unsafe {
+        let fd = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
+        assert!(fd >= 0, "{}", std::io::Error::last_os_error());
+        let keyboard = File::from_raw_fd(fd);
+        assert_eq!(libc::grantpt(fd), 0);
+        assert_eq!(libc::unlockpt(fd), 0);
+        let name = CStr::from_ptr(libc::ptsname(fd))
+            .to_str()
+            .unwrap()
+            .to_string();
+        (keyboard, name)
+    };
+    let terminal = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NOCTTY)
+        .open(name)
+        .unwrap();
+    let ca = trust(engine, dir);
+    let child = Command::new(env!("CARGO_BIN_EXE_ontologic"))
+        .current_dir(dir)
+        .args(["-h", engine.host(), "-u", USER, "-p", KEY, "--ca", &ca])
+        .env("TERM", "dumb")
+        .env("NO_COLOR", "1")
+        .stdin(terminal)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    keyboard.write_all(input.as_bytes()).unwrap();
+    let output = child.wait_with_output().unwrap();
+    let (stdout, stderr) = (
+        String::from_utf8(output.stdout).unwrap(),
+        String::from_utf8(output.stderr).unwrap(),
+    );
+    assert!(output.status.success(), "{stdout}{stderr}");
+    stdout
+}
+
+#[cfg(unix)]
+#[test]
+fn questions_and_feedback_never_reach_the_history_file() {
+    let engine = engine();
+    engine.reply(Rpc::CreateTenant, tenant("acme", 0, 0, 0));
+    engine.stream(Rpc::Ask, logged_answer("a1", &[]));
+    engine.reply(Rpc::Feedback, pb::Empty {});
+    let dir = workdir("history");
+    let history = dir.join(".ontologic_history");
+    // What an older CLI wrote, a question among its lines (backslashes are escaped).
+    std::fs::write(
+        &history,
+        "#V2\n\\\\t get\n\\\\ask who owns Lumenworks\n\\\\t users\n",
+    )
+    .unwrap();
+    let out = typed(
+        &engine,
+        &dir,
+        "\\t create acme\n\\ask who founded Lumenworks\n\\partly it left out Priya\n\\bad\n\
+         \\good thanks\nwho founded Acme\n\\t get\n\\q\n",
+    );
+    // The lines were typed and run.
+    assert_has(&out, "kept as a1 for feedback");
+    assert_has(&out, "acme> feedback on a1: partly, with your note\n");
+    assert_has(&out, "acme> feedback on a1: right, with your note\n");
+    assert_has(&out, "acme> error: unknown command who, see \\h\n");
+    assert_eq!(calls_to(&engine, Rpc::Feedback).len(), 3);
+    assert_eq!(
+        std::fs::read_to_string(&history).unwrap(),
+        "#V2\n\\\\t get\n\\\\t users\n\\\\t create acme\n\\\\t get\n\\\\q\n"
+    );
+}
+
 #[test]
 fn a_set_page_the_cli_never_asks_for_prints_only_its_count() {
     let engine = engine();

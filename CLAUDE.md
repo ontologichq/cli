@@ -16,7 +16,9 @@ messages. Tests and docs use invented names (Maya Chen, Priya Raman, Tomas, Acme
 
 - `src/main.rs`: flags (`-h`, `-u` or `ONTOLOGIC_USER`, `-p` or `ONTOLOGIC_KEY`, `--ca`,
   `--no-color`), connecting, and two loops: interactive (rustyline, history in
-  `.ontologic_history`) and piped (stdin is not a terminal; a prompt is printed before each line).
+  `.ontologic_history`, which never gets a line `input::kept_on_disk` refuses: questions, feedback
+  and lines that are not commands) and piped (stdin is not a terminal; a prompt is printed before
+  each line).
 - `src/commands.rs`: `Cli` and what each command does (call the engine, render the reply),
   `HELP`, the startup banner (`Me`, `Health`, `ListTenants`; a wrong key exits with 1), the
   session's cost, and the last answer the engine logged (the `ask_id` on an ask's `Finished`),
@@ -46,7 +48,9 @@ change kit and the CLI together, patch it to a sibling checkout in a gitignored
   commands in with `-h <fake host> -u <user> -p <key> --ca <its certificate>` from a fresh
   directory under `target/tmp`, asserts on substrings of what the CLI printed (stdout is a pipe,
   so no colors), and checks what the engine got with `calls()`. At startup the CLI calls `Me`,
-  `Health` and `ListTenants`, which take the first scripted reply of each.
+  `Health` and `ListTenants`, which take the first scripted reply of each. On unix, `typed` gives
+  the CLI a pseudo-terminal for stdin instead (`TERM=dumb`), so it runs its interactive loop and
+  writes its history file.
 - What the CLI prints is its interface: a change to the rendering changes the expected text in
   `tests/cli.rs` in the same commit.
 

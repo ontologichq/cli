@@ -203,6 +203,16 @@ pub fn parse(line: &str) -> Option<Command<'_>> {
     })
 }
 
+/// Whether a typed line may be written to the history file. Questions and feedback stay in the
+/// session, and so does a line that is not a command (a question typed without `\ask`, or the
+/// answer to a confirmation).
+pub fn kept_on_disk(line: &str) -> bool {
+    !matches!(
+        parse(line),
+        None | Some(Command::Ask(_) | Command::Feedback(..) | Command::Unknown(_))
+    )
+}
+
 const COMMAND: &str = "1;36";
 const SUBCOMMAND: &str = "1;35";
 const TEXT: &str = "32";
@@ -556,6 +566,25 @@ mod tests {
             parse("\\t asklog 30"),
             Some(Command::Tenant("asklog", "30"))
         ));
+    }
+
+    #[test]
+    fn questions_feedback_and_other_text_are_not_kept_on_disk() {
+        for line in [
+            "\\ask who founded Lumenworks",
+            "  \\ask --staged where is Acme",
+            "\\good",
+            "\\partly it left out Priya",
+            "\\bad wrong city",
+            "who founded Lumenworks",
+            "acme",
+            " ",
+        ] {
+            assert!(!kept_on_disk(line), "{line:?}");
+        }
+        for line in ["\\t create acme", "\\s e1", "\\import blob mail.eml", "\\q"] {
+            assert!(kept_on_disk(line), "{line:?}");
+        }
     }
 
     #[test]
