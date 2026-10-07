@@ -77,7 +77,8 @@ File names in commands are relative to the directory the CLI runs from.
 A fact shows how sure the engine is of it and, from an engine that ranks its facts, its rung: what
 it may be used for (`proposed`, `supported`, `accepted`, `computable` or `identity-trusted`). An
 answer that is a number the engine computed shows its floor and its ceiling, and how far it can be
-claimed.
+claimed. An answer a check doubts is shown with `unsure` and why; one whose options a check dropped
+says `withheld` and why.
 
 ## Develop
 

@@ -1789,6 +1789,68 @@ fn a_computed_count_shows_its_floor_and_its_ceiling() {
 }
 
 #[test]
+fn an_answer_says_when_a_check_doubts_it_or_withheld_it() {
+    let engine = engine();
+    engine.reply(Rpc::CreateTenant, tenant("acme", 0, 0, 0));
+    let answered = |status: &str, reason: &str, options: Vec<pb::AnswerOption>| {
+        vec![ask_event(Ask::Answer(pb::AskAnswer {
+            something_else: 1.0 - options.iter().map(|o| o.probability).sum::<f32>(),
+            options,
+            exclusive: true,
+            status: status.into(),
+            status_reason: reason.into(),
+            ..Default::default()
+        }))]
+    };
+    let maya = || {
+        vec![pb::AnswerOption {
+            answer: "Maya Chen".into(),
+            entity_id: "e1".into(),
+            probability: 0.75,
+            based_on: vec![cite("s1", "Maya founded Lumenworks.", None)],
+            ..Default::default()
+        }]
+    };
+    engine.stream(
+        Rpc::Ask,
+        answered("unsure", "no source it was shown names a founder", maya()),
+    );
+    engine.stream(
+        Rpc::Ask,
+        answered(
+            "withheld",
+            "the answer cites no source it was shown",
+            Vec::new(),
+        ),
+    );
+    engine.stream(Rpc::Ask, answered("unsure", "", maya()));
+    engine.stream(Rpc::Ask, answered("answered", "", maya()));
+    engine.stream(Rpc::Ask, answered("computed", "", maya()));
+    let dir = workdir("status");
+    let out = ontologic(
+        &engine,
+        &dir,
+        "\\t create acme\n\\ask who founded Lumenworks\n\\ask who founded Acme\n\
+         \\ask who leads Lumenworks\n\\ask who started Lumenworks\n\\ask how many founders\n",
+    );
+    assert_has(
+        &out,
+        "acme>  answer   Maya Chen (e1) 75%  from s1\n\
+         \x20         something else 25%\n\
+         \x20status   unsure: no source it was shown names a founder\n\
+         \x20basis    cites s1\nacme> ",
+    );
+    assert_has(
+        &out,
+        "acme>  answer   I don't know (something else 100%)\n\
+         \x20status   withheld: the answer cites no source it was shown\nacme> ",
+    );
+    assert_has(&out, " status   unsure\n basis    cites s1\n");
+    // An answer given or computed, like one from an engine before 0.3.0, has no status line.
+    assert_eq!(out.matches(" status   ").count(), 3, "{out}");
+}
+
+#[test]
 fn a_set_page_the_cli_never_asks_for_prints_only_its_count() {
     let engine = engine();
     engine.reply(Rpc::CreateTenant, tenant("acme", 0, 0, 0));
