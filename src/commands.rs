@@ -167,7 +167,8 @@ impl Cli {
             }
         };
         let signed_in = format!("signed in as {} ({})", paint::bold(&me.name), me.role);
-        match self.call(self.rt.block_on(client.health(pb::Empty {}))) {
+        let health = self.call(self.rt.block_on(client.health(pb::Empty {})));
+        match &health {
             Ok(h) if h.llm_error.is_empty() => say(&format!(
                 "{} {} · llm {} · tagger {} · embedder {} · {signed_in}",
                 paint::dim("engine:"),
@@ -185,7 +186,14 @@ impl Cli {
                     h.llm_error
                 ))
             )),
-            Err(e) => say(&render::error(&e)),
+            Err(e) => say(&render::error(e)),
+        }
+        // What the engine says is wrong now (kit 0.4.0): a provider refusing its key or out of
+        // credit, a tenant's index missing vectors. An older engine says nothing.
+        if let Ok(h) = &health {
+            for line in &h.degraded {
+                say(&render::warning(&format!("the engine reports {line}")));
+            }
         }
         if let Ok(list) = self.rt.block_on(client.list_tenants(pb::Empty {})) {
             self.names.borrow_mut().tenants = list
