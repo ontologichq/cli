@@ -341,7 +341,12 @@ pub fn version(host: &str, health: &pb::HealthReply, cli: &str) -> String {
                 health.llm, health.tagger, health.embedder
             )],
         ),
+        // What is wrong now (kit 0.4.0), a line each; nothing when nothing is.
+        row("degraded", &health.degraded),
     ]
+    .into_iter()
+    .filter(|part| !part.is_empty())
+    .collect::<Vec<_>>()
     .join("\n")
 }
 

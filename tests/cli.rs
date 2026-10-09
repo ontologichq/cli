@@ -45,6 +45,7 @@ fn health() -> pb::HealthReply {
         tagger: "fake-tagger".into(),
         version: "0abc123, built 2026-09-14 05:12 UTC".into(),
         embedder: "fake-embedder".into(),
+        degraded: Vec::new(),
     }
 }
 
@@ -316,6 +317,26 @@ fn an_engine_without_a_model_warns_that_imports_and_questions_will_fail() {
             engine.host()
         ),
     );
+}
+
+/// Kit 0.4.0: what the engine says is degraded is a warning at the start and a row of `\\v`.
+#[test]
+fn what_the_engine_says_is_degraded_is_warned_and_shown() {
+    let engine = FakeEngine::start();
+    engine.sign_in(USER, KEY);
+    engine.reply(Rpc::Me, user(USER, "admin", &[]));
+    engine.reply(
+        Rpc::Health,
+        pb::HealthReply {
+            degraded: vec!["embedder: credit spent".into()],
+            ..health()
+        },
+    );
+    engine.reply(Rpc::ListTenants, pb::TenantList::default());
+    let dir = workdir("degraded");
+    let out = ontologic(&engine, &dir, "\\v\n");
+    assert_has(&out, "warning: the engine reports embedder: credit spent");
+    assert_has(&out, "degraded embedder: credit spent");
 }
 
 #[test]
